@@ -2,6 +2,8 @@
 
 AI-powered real estate WhatsApp bot built with FastAPI and deployed on Azure Container Apps.
 
+🚀 **Status**: Ready for production deployment via GitHub Actions!
+
 ## 🚀 Features
 
 - ✅ WhatsApp Business API integration
