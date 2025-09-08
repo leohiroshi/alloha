@@ -1,0 +1,59 @@
+name: Deploy Alloha Bot to Azure Container Apps
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AZURE_CONTAINER_REGISTRY: allohaapp.azurecr.io
+  IMAGE_NAME: alloha-whatsapp-bot
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🔐 Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: 🏗️ Build and push to Azure Container Registry
+      run: |
+        # Login to ACR
+        az acr login --name allohaapp
+        
+        # Build and push image
+        az acr build --registry allohaapp \
+          --image ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --image ${{ env.IMAGE_NAME }}:latest \
+          .
+
+    - name: 🚀 Deploy to Container Apps
+      run: |
+        az containerapp update \
+          --name alloha-backend \
+          --resource-group rg-alloha-prod \
+          --image ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+          --set-env-vars \
+            WHATSAPP_WEBHOOK_VERIFY_TOKEN="${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}" \
+            WHATSAPP_ACCESS_TOKEN="${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
+            WHATSAPP_PHONE_NUMBER_ID="${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}" \
+            ABACUS_API_KEY="${{ secrets.ABACUS_API_KEY }}" \
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            SECRET_KEY="${{ secrets.SECRET_KEY }}" \
+            AI_PROVIDER="abacus" \
+            ENVIRONMENT="production" \
+            HOST="0.0.0.0" \
+            PORT="8000"
+
+    - name: ✅ Deployment Status
+      run: |
+        echo "🎉 Deployment completed!"
+        echo "🌐 Application URL: https://alloha.app"
+        echo "📚 API Docs: https://alloha.app/docs"
+        echo "💚 Health Check: https://alloha.app/health"
