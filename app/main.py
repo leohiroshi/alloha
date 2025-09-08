@@ -115,22 +115,66 @@ async def process_whatsapp_message(webhook_data):
         from_number = message["from"]
         message_text = message.get("text", {}).get("body", "")
         
-        logger.info(f"Message from {from_number}: {message_text}")
+        logger.info(f"💬 Message from {from_number}: {message_text}")
         
         # Salvar mensagem no banco
         await db_service.save_message(from_number, message_text, "received")
         
-        # Gerar resposta com AI
+        # Gerar resposta com IA avançada (agora com contexto)
         ai_response = await ai_service.generate_response(message_text, from_number)
         
-        # Enviar resposta via WhatsApp
-        await whatsapp_service.send_message(from_number, ai_response)
+        logger.info(f"🤖 AI Response: {ai_response}")
         
-        # Salvar resposta no banco
-        await db_service.save_message(from_number, ai_response, "sent")
+        # Enviar resposta via WhatsApp
+        success = await whatsapp_service.send_message(from_number, ai_response)
+        
+        if success:
+            # Salvar resposta no banco
+            await db_service.save_message(from_number, ai_response, "sent")
+            logger.info(f"✅ Message sent successfully to {from_number}")
+        else:
+            logger.error(f"❌ Failed to send message to {from_number}")
         
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
+
+@app.get("/analytics/{user_phone}")
+async def get_user_analytics(user_phone: str):
+    """Obter analytics de um usuário específico"""
+    try:
+        stats = ai_service.get_conversation_stats(user_phone)
+        return {
+            "user_phone": user_phone,
+            "analytics": stats,
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Error getting analytics: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/test-ai")
+async def test_ai_response(request: Request):
+    """Endpoint para testar respostas da IA"""
+    try:
+        body = await request.json()
+        message = body.get("message", "")
+        user_phone = body.get("user_phone", "test_user")
+        
+        if not message:
+            raise HTTPException(status_code=400, detail="Message is required")
+        
+        response = await ai_service.generate_response(message, user_phone)
+        
+        return {
+            "input_message": message,
+            "ai_response": response,
+            "user_phone": user_phone,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error testing AI: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

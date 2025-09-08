@@ -2,7 +2,9 @@ import aiohttp
 import logging
 import os
 import json
-from typing import Optional
+import re
+from typing import Optional, Dict, List
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -15,42 +17,276 @@ class AIService:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
+        
+        # Cache de conversas por usuário
+        self.conversation_context = {}
+        
+        # Base de conhecimento sobre imóveis
+        self.property_knowledge = {
+            "tipos": ["apartamento", "casa", "kitnet", "studio", "cobertura", "terreno", "comercial"],
+            "regioes": ["centro", "zona sul", "zona norte", "zona oeste", "zona leste"],
+            "faixas_preco": {
+                "baixo": "até R$ 200.000",
+                "medio": "R$ 200.000 - R$ 500.000", 
+                "alto": "R$ 500.000 - R$ 1.000.000",
+                "premium": "acima de R$ 1.000.000"
+            },
+            "caracteristicas": ["quartos", "banheiros", "vagas", "area", "piscina", "churrasqueira"]
+        }
     
     async def generate_response(self, message: str, user_phone: str) -> str:
-        """Gerar resposta usando Abacus AI"""
+        """Gerar resposta inteligente usando Abacus AI com contexto"""
         try:
             if not self.api_key:
-                return "Desculpe, o serviço de AI não está configurado no momento."
+                return await self._fallback_response(message)
             
-            # Prompt personalizado para imobiliária
-            system_prompt = """
-            Você é um assistente especializado em imóveis da Alloha, uma imobiliária inovadora.
+            # Analisar intenção do usuário
+            intent = await self._analyze_intent(message)
             
-            Suas responsabilidades:
-            - Ajudar clientes a encontrar imóveis (casas, apartamentos, terrenos)
-            - Fornecer informações sobre compra, venda e aluguel
-            - Dar dicas sobre financiamento e documentação
-            - Agendar visitas e reuniões
-            - Ser sempre educado, profissional e prestativo
+            # Recuperar contexto da conversa
+            context = self._get_conversation_context(user_phone)
             
-            Responda de forma clara, objetiva e amigável.
-            Limite suas respostas a 200 caracteres para WhatsApp.
-            """
+            # Atualizar contexto
+            self._update_conversation_context(user_phone, message, intent)
             
-            user_prompt = f"Cliente pergunta: {message}"
+            # Gerar resposta baseada na intenção e contexto
+            response = await self._generate_contextual_response(message, intent, context)
             
-            # Usar API do Abacus para gerar resposta
-            response = await self._call_abacus_api(system_prompt, user_prompt)
-            
-            if response:
-                return response
-            else:
-                return "Olá! Sou o assistente da Alloha. Como posso ajudá-lo com imóveis hoje?"
+            return response
                 
         except Exception as e:
             logger.error(f"Error generating AI response: {str(e)}")
             return "Desculpe, houve um problema. Tente novamente em alguns instantes."
     
+    async def _analyze_intent(self, message: str) -> Dict:
+        """Analisar intenção da mensagem"""
+        message_lower = message.lower()
+        
+        intent = {
+            "type": "unknown",
+            "confidence": 0.0,
+            "entities": {}
+        }
+        
+        # Detectar saudações
+        if any(word in message_lower for word in ["oi", "olá", "hello", "hi", "bom dia", "boa tarde", "boa noite"]):
+            intent["type"] = "greeting"
+            intent["confidence"] = 0.9
+        
+        # Detectar busca por imóveis
+        elif any(word in message_lower for word in ["apartamento", "casa", "imóvel", "comprar", "alugar"]):
+            intent["type"] = "property_search"
+            intent["confidence"] = 0.8
+            
+            # Extrair entidades
+            for tipo in self.property_knowledge["tipos"]:
+                if tipo in message_lower:
+                    intent["entities"]["property_type"] = tipo
+            
+            for regiao in self.property_knowledge["regioes"]:
+                if regiao in message_lower:
+                    intent["entities"]["location"] = regiao
+            
+            # Extrair números (quartos, preço)
+            numbers = re.findall(r'\d+', message)
+            if numbers:
+                intent["entities"]["numbers"] = numbers
+        
+        # Detectar consulta de preço
+        elif any(word in message_lower for word in ["preço", "valor", "quanto", "custo"]):
+            intent["type"] = "price_inquiry"
+            intent["confidence"] = 0.8
+        
+        # Detectar agendamento
+        elif any(word in message_lower for word in ["visita", "agendar", "ver", "conhecer"]):
+            intent["type"] = "schedule_visit"
+            intent["confidence"] = 0.8
+        
+        # Detectar informações
+        elif any(word in message_lower for word in ["documentos", "financiamento", "fies", "itbi"]):
+            intent["type"] = "information"
+            intent["confidence"] = 0.7
+        
+        return intent
+    
+    def _get_conversation_context(self, user_phone: str) -> Dict:
+        """Recuperar contexto da conversa"""
+        if user_phone not in self.conversation_context:
+            self.conversation_context[user_phone] = {
+                "messages": [],
+                "preferences": {},
+                "last_intent": None,
+                "created_at": datetime.now()
+            }
+        return self.conversation_context[user_phone]
+    
+    def _update_conversation_context(self, user_phone: str, message: str, intent: Dict):
+        """Atualizar contexto da conversa"""
+        context = self._get_conversation_context(user_phone)
+        context["messages"].append({
+            "message": message,
+            "intent": intent,
+            "timestamp": datetime.now()
+        })
+        context["last_intent"] = intent["type"]
+        
+        # Manter apenas últimas 10 mensagens
+        if len(context["messages"]) > 10:
+            context["messages"] = context["messages"][-10:]
+    
+    async def _generate_contextual_response(self, message: str, intent: Dict, context: Dict) -> str:
+        """Gerar resposta baseada no contexto"""
+        intent_type = intent["type"]
+        
+        if intent_type == "greeting":
+            return await self._handle_greeting(context)
+        elif intent_type == "property_search":
+            return await self._handle_property_search(message, intent, context)
+        elif intent_type == "price_inquiry":
+            return await self._handle_price_inquiry(message, intent, context)
+        elif intent_type == "schedule_visit":
+            return await self._handle_schedule_visit(message, intent, context)
+        elif intent_type == "information":
+            return await self._handle_information_request(message, intent, context)
+        else:
+            return await self._handle_general_inquiry(message, context)
+    
+    async def _handle_greeting(self, context: Dict) -> str:
+        """Responder saudações"""
+        if len(context["messages"]) == 1:  # Primeira interação
+            return """🏠 Olá! Bem-vindo à Alloha! 
+
+Sou seu assistente especializado em imóveis. Posso ajudar você a:
+• Encontrar apartamentos e casas
+• Informações sobre preços
+• Agendar visitas
+• Dicas de financiamento
+
+O que você procura hoje?"""
+        else:
+            return "Olá novamente! Como posso ajudá-lo hoje? 😊"
+    
+    async def _handle_property_search(self, message: str, intent: Dict, context: Dict) -> str:
+        """Lidar com busca por imóveis"""
+        entities = intent.get("entities", {})
+        
+        # Criar prompt contextual para Abacus AI
+        system_prompt = """Você é um corretor especialista da Alloha Imóveis.
+        Responda de forma amigável e profissional sobre busca de imóveis.
+        Seja específico e útil. Limite a resposta a 300 caracteres."""
+        
+        context_info = ""
+        if entities:
+            context_info = f"Cliente interessado em: {entities}"
+        
+        user_prompt = f"""Cliente busca imóvel: {message}
+        Contexto: {context_info}
+        
+        Forneça uma resposta útil sobre opções disponíveis."""
+        
+        ai_response = await self._call_abacus_api(system_prompt, user_prompt)
+        
+        if ai_response:
+            return ai_response
+        
+        # Fallback response
+        response = "🔍 Ótimo! Vamos encontrar o imóvel ideal para você.\n\n"
+        
+        if "property_type" in entities:
+            response += f"Você está interessado em {entities['property_type']}. "
+        
+        if "location" in entities:
+            response += f"Na região {entities['location']}. "
+        
+        response += "\nPode me contar mais sobre suas preferências? (quartos, orçamento, etc.)"
+        
+        return response
+    
+    async def _handle_price_inquiry(self, message: str, intent: Dict, context: Dict) -> str:
+        """Lidar com consultas de preço"""
+        system_prompt = """Você é um especialista em preços de imóveis da Alloha.
+        Forneça informações realistas sobre faixas de preço.
+        Seja específico e útil. Máximo 300 caracteres."""
+        
+        ai_response = await self._call_abacus_api(system_prompt, f"Cliente pergunta sobre preços: {message}")
+        
+        if ai_response:
+            return ai_response
+        
+        return """💰 Os preços variam conforme localização e características:
+
+• Apartamentos: R$ 150k - R$ 800k+
+• Casas: R$ 200k - R$ 1.5M+
+• Kitnets: R$ 80k - R$ 200k
+
+Que tipo de imóvel te interessa? Posso dar valores mais específicos!"""
+    
+    async def _handle_schedule_visit(self, message: str, intent: Dict, context: Dict) -> str:
+        """Lidar com agendamento de visitas"""
+        return """📅 Perfeito! Vamos agendar sua visita.
+
+Para agilizar o processo, preciso de:
+• Seu nome completo
+• Imóvel de interesse
+• Dias/horários de preferência
+
+Um corretor entrará em contato em até 2h para confirmar!
+
+Qual imóvel gostaria de visitar?"""
+    
+    async def _handle_information_request(self, message: str, intent: Dict, context: Dict) -> str:
+        """Lidar com pedidos de informação"""
+        system_prompt = """Você é um consultor imobiliário da Alloha especialista em documentação e financiamento.
+        Forneça informações práticas e úteis. Máximo 300 caracteres."""
+        
+        ai_response = await self._call_abacus_api(system_prompt, f"Cliente pergunta: {message}")
+        
+        if ai_response:
+            return ai_response
+        
+        return """📋 Posso ajudar com informações sobre:
+
+• Documentação necessária
+• Financiamento e FGTS
+• ITBI e custos extras
+• Processo de compra/venda
+
+Sobre o que você gostaria de saber?"""
+    
+    async def _handle_general_inquiry(self, message: str, context: Dict) -> str:
+        """Lidar com perguntas gerais"""
+        system_prompt = """Você é o assistente da Alloha Imóveis.
+        Responda de forma amigável e direcione para serviços imobiliários.
+        Máximo 250 caracteres."""
+        
+        ai_response = await self._call_abacus_api(system_prompt, f"Cliente pergunta: {message}")
+        
+        if ai_response:
+            return ai_response
+        
+        return f"""🤖 Entendi: "{message}"
+
+Como especialista em imóveis, posso ajudar com:
+• Busca de apartamentos/casas
+• Informações de preços
+• Agendamento de visitas
+• Documentação
+
+Como posso ajudá-lo hoje?"""
+    
+    async def _fallback_response(self, message: str) -> str:
+        """Resposta quando IA não está disponível"""
+        message_lower = message.lower()
+        
+        if any(word in message_lower for word in ["oi", "olá", "hello"]):
+            return "🏠 Olá! Sou o assistente da Alloha. Como posso ajudá-lo com imóveis?"
+        elif any(word in message_lower for word in ["apartamento", "casa"]):
+            return "🔍 Ótimo! Que tipo de imóvel você procura? Em qual região?"
+        elif any(word in message_lower for word in ["preço", "valor"]):
+            return "💰 Posso ajudar com informações de preços. Que tipo de imóvel te interessa?"
+        else:
+            return "🤖 Olá! Sou especialista em imóveis. Como posso ajudá-lo hoje?"
+
     async def _call_abacus_api(self, system_prompt: str, user_prompt: str) -> Optional[str]:
         """Chamar API do Abacus AI"""
         try:
@@ -61,7 +297,7 @@ class AIService:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                "max_tokens": 150,
+                "max_tokens": 200,
                 "temperature": 0.7
             }
             
@@ -69,11 +305,14 @@ class AIService:
                 async with session.post(
                     f"{self.base_url}/chat/completions", 
                     headers=self.headers, 
-                    json=payload
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10)
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return data["choices"][0]["message"]["content"].strip()
+                        content = data["choices"][0]["message"]["content"].strip()
+                        # Limitar tamanho para WhatsApp
+                        return content[:300] if len(content) > 300 else content
                     else:
                         error_text = await response.text()
                         logger.error(f"Abacus API error: {response.status} - {error_text}")
@@ -87,24 +326,49 @@ class AIService:
         """Verificar se o serviço de AI está disponível"""
         return bool(self.api_key)
     
-    async def get_property_suggestions(self, criteria: str) -> str:
-        """Sugerir imóveis baseado em critérios"""
+    async def get_property_suggestions(self, criteria: str, user_phone: str) -> str:
+        """Sugerir imóveis baseado em critérios com contexto"""
         try:
-            prompt = f"""
-            Baseado nos critérios: {criteria}
+            context = self._get_conversation_context(user_phone)
             
-            Sugira algumas opções de imóveis que podem interessar ao cliente.
-            Inclua tipos de imóveis, faixas de preço e bairros recomendados.
-            Mantenha a resposta concisa para WhatsApp.
-            """
+            system_prompt = """Você é um especialista em imóveis da Alloha.
+            Sugira imóveis específicos baseado nos critérios do cliente.
+            Inclua tipos, preços estimados e localizações.
+            Seja específico e útil. Máximo 400 caracteres."""
             
-            response = await self._call_abacus_api(
-                "Você é um especialista em imóveis que sugere propriedades.",
-                prompt
-            )
+            user_prompt = f"""Critérios do cliente: {criteria}
             
-            return response or "Vou verificar as melhores opções para você. Um corretor entrará em contato em breve!"
+            Histórico da conversa: {context.get('messages', [])}
+            
+            Sugira opções de imóveis adequadas."""
+            
+            response = await self._call_abacus_api(system_prompt, user_prompt)
+            
+            if response:
+                return response
+            
+            return """🏠 Baseado no que você procura, temos ótimas opções!
+
+Vou conectar você com um de nossos corretores especializados que tem acesso ao nosso portfólio completo.
+
+Quer agendar uma conversa?"""
             
         except Exception as e:
             logger.error(f"Error getting property suggestions: {str(e)}")
             return "Erro ao buscar sugestões. Tente novamente."
+    
+    def get_conversation_stats(self, user_phone: str) -> Dict:
+        """Obter estatísticas da conversa"""
+        context = self._get_conversation_context(user_phone)
+        
+        intent_counts = {}
+        for msg in context["messages"]:
+            intent_type = msg["intent"]["type"]
+            intent_counts[intent_type] = intent_counts.get(intent_type, 0) + 1
+        
+        return {
+            "total_messages": len(context["messages"]),
+            "intent_distribution": intent_counts,
+            "last_intent": context.get("last_intent"),
+            "conversation_started": context.get("created_at")
+        }
