@@ -445,7 +445,7 @@ class IntelligentRealEstateBot:
             logger.info("🚀 Inicializando sistema de inteligência imobiliária...")
             
             # Verificar Firebase
-            if not await self.firebase_service.check_connection():
+            if not self.firebase_service.check_connection():
                 logger.warning("⚠️ Firebase offline - usando modo degradado")
             
             # Carregar dados de imóveis
