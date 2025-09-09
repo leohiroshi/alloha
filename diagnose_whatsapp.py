@@ -81,8 +81,8 @@ def check_whatsapp_api_connection():
     print("\n🔍 TESTE 3: Conexão com WhatsApp API")
     print("-" * 50)
     
-    # Token do seu .env
-    access_token = "EAFdIh8H8IZCYBPTrTrXBucLYdHTeBrVnrHQxSo2BzdF4HAkNNUFdqN9L7q8NZCvdTLg5bRFO29dtfag8ByYBTZBo8vW9sldx64bLUZAbQWYt2g88ozpfiKgb2GcA7SZCNOURro2o2xVGPyB5ZB2MuySFZCWhldWBC9zZCJUvV6TcNoyy4EtUzCxcNlo5IT6BZAexzFBkErmLTCXWJzBIYcWMaNwNtH2iYa3oCASB7vZBJAMBB9FvBsxDUMHHVa3zzQ3QZDZD"
+    # Token do seu .env (NOVO TOKEN ATUALIZADO)
+    access_token = "EAFdIh8H8IZCYBPQOOGVt4UUORiq4cMOtVmeHyd8oWG3qzl6xywSCXEjiPR4wJpdVXDzsEJN4GLnsp27zRdsjl5tTd20nruQMtxnA0ZBxHj1eJVYj8q8NADWQErVFivJfEDcpUYP1YwjZASJ8eLf1H8zH5O5fjnXWOZBTYj4492GDGSDGcQ7WLswIi85lzsHjy4e1AHmCw3iA7z1JjNLQ7mZB1PG2f2GtXZCFavb6UYPX7a3Rpy7Dr5ExemgKr9BgZDZD"
     phone_number_id = "711526708720131"
     
     # Testar se o token é válido

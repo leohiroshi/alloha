@@ -1,0 +1,55 @@
+[
+  {
+    "id": "apt_001",
+    "type": "apartamento",
+    "bedrooms": 2,
+    "bathrooms": 1,
+    "area": 65,
+    "price": 350000,
+    "location": "zona_sul",
+    "neighborhood": "Copacabana",
+    "description": "Apartamento moderno com vista para o mar",
+    "amenities": [
+      "piscina",
+      "academia",
+      "portaria_24h"
+    ],
+    "available": true,
+    "created_at": "2025-09-08T00:00:00Z"
+  },
+  {
+    "id": "casa_001",
+    "type": "casa",
+    "bedrooms": 3,
+    "bathrooms": 2,
+    "area": 120,
+    "price": 650000,
+    "location": "zona_oeste",
+    "neighborhood": "Barra da Tijuca",
+    "description": "Casa em condomínio fechado com jardim",
+    "amenities": [
+      "jardim",
+      "churrasqueira",
+      "garagem_2_vagas"
+    ],
+    "available": true,
+    "created_at": "2025-09-08T00:00:00Z"
+  },
+  {
+    "id": "apt_002",
+    "type": "apartamento",
+    "bedrooms": 1,
+    "bathrooms": 1,
+    "area": 45,
+    "price": 280000,
+    "location": "centro",
+    "neighborhood": "Centro",
+    "description": "Studio compacto ideal para jovens profissionais",
+    "amenities": [
+      "metro_nearby",
+      "comercio_local"
+    ],
+    "available": true,
+    "created_at": "2025-09-08T00:00:00Z"
+  }
+]

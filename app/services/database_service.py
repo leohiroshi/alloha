@@ -1,179 +1,227 @@
-import asyncpg
-import logging
 import os
-from typing import Optional, Dict, List
+import logging
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Configurar o tipo de banco
+DATABASE_TYPE = os.getenv("DATABASE_TYPE", "firebase")
+
 class DatabaseService:
     def __init__(self):
-        self.database_url = os.getenv("DATABASE_URL", "")
-        self.pool = None
-    
-    async def init_pool(self):
-        """Inicializar pool de conexões"""
-        try:
-            if self.database_url:
-                self.pool = await asyncpg.create_pool(self.database_url, min_size=1, max_size=10)
-                await self.create_tables()
-                logger.info("Database pool initialized successfully")
-            else:
-                logger.warning("Database URL not configured")
-        except Exception as e:
-            logger.error(f"Error initializing database pool: {str(e)}")
-    
-    async def create_tables(self):
-        """Criar tabelas necessárias"""
-        try:
-            if not self.pool:
-                return
+        if DATABASE_TYPE == "firebase":
+            from app.services.firebase_service import FirebaseService
+            self.firebase_service = FirebaseService()
+            self._use_firebase = True
+        else:
+            # PostgreSQL como backup
+            self.connection_string = os.getenv("DATABASE_URL", "")
+            self.pool = None
+            self._use_firebase = False
             
-            async with self.pool.acquire() as conn:
-                # Tabela de usuários
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        id SERIAL PRIMARY KEY,
-                        phone_number VARCHAR(20) UNIQUE NOT NULL,
-                        name VARCHAR(100),
-                        email VARCHAR(100),
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                
-                # Tabela de mensagens
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS messages (
-                        id SERIAL PRIMARY KEY,
-                        phone_number VARCHAR(20) NOT NULL,
-                        message_text TEXT NOT NULL,
-                        message_type VARCHAR(20) NOT NULL, -- 'received' or 'sent'
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (phone_number) REFERENCES users(phone_number) ON DELETE CASCADE
-                    )
-                """)
-                
-                # Tabela de conversas/sessões
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS conversations (
-                        id SERIAL PRIMARY KEY,
-                        phone_number VARCHAR(20) NOT NULL,
-                        context TEXT,
-                        last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        status VARCHAR(20) DEFAULT 'active',
-                        FOREIGN KEY (phone_number) REFERENCES users(phone_number) ON DELETE CASCADE
-                    )
-                """)
-                
-                logger.info("Database tables created/verified successfully")
-                
-        except Exception as e:
-            logger.error(f"Error creating tables: {str(e)}")
-    
-    async def save_message(self, phone_number: str, message_text: str, message_type: str):
-        """Salvar mensagem no banco"""
-        try:
-            if not self.pool:
-                logger.warning("Database not available")
-                return
-            
-            async with self.pool.acquire() as conn:
-                # Primeiro, garantir que o usuário existe
-                await conn.execute("""
-                    INSERT INTO users (phone_number) 
-                    VALUES ($1) 
-                    ON CONFLICT (phone_number) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-                """, phone_number)
-                
-                # Salvar mensagem
-                await conn.execute("""
-                    INSERT INTO messages (phone_number, message_text, message_type)
-                    VALUES ($1, $2, $3)
-                """, phone_number, message_text, message_type)
-                
-                logger.info(f"Message saved: {phone_number} - {message_type}")
-                
-        except Exception as e:
-            logger.error(f"Error saving message: {str(e)}")
-    
-    async def get_user_context(self, phone_number: str) -> Optional[str]:
-        """Obter contexto da conversa do usuário"""
-        try:
-            if not self.pool:
-                return None
-            
-            async with self.pool.acquire() as conn:
-                result = await conn.fetchrow("""
-                    SELECT context FROM conversations 
-                    WHERE phone_number = $1 AND status = 'active'
-                    ORDER BY last_activity DESC LIMIT 1
-                """, phone_number)
-                
-                return result['context'] if result else None
-                
-        except Exception as e:
-            logger.error(f"Error getting user context: {str(e)}")
-            return None
-    
-    async def update_user_context(self, phone_number: str, context: str):
-        """Atualizar contexto da conversa"""
-        try:
-            if not self.pool:
-                return
-            
-            async with self.pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO conversations (phone_number, context)
-                    VALUES ($1, $2)
-                    ON CONFLICT (phone_number) DO UPDATE SET 
-                        context = $2, 
-                        last_activity = CURRENT_TIMESTAMP
-                """, phone_number, context)
-                
-        except Exception as e:
-            logger.error(f"Error updating user context: {str(e)}")
-    
-    async def get_recent_messages(self, phone_number: str, limit: int = 10) -> List[Dict]:
-        """Obter mensagens recentes do usuário"""
-        try:
-            if not self.pool:
-                return []
-            
-            async with self.pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT message_text, message_type, created_at
-                    FROM messages 
-                    WHERE phone_number = $1
-                    ORDER BY created_at DESC 
-                    LIMIT $2
-                """, phone_number, limit)
-                
-                return [dict(row) for row in rows]
-                
-        except Exception as e:
-            logger.error(f"Error getting recent messages: {str(e)}")
-            return []
-    
     async def check_connection(self) -> bool:
-        """Verificar conexão com banco"""
+        """Verificar se a conexão com o banco está ativa"""
         try:
-            if not self.pool:
-                if self.database_url:
+            if self._use_firebase:
+                return self.firebase_service.check_connection()
+            else:
+                # PostgreSQL connection check
+                if not self.pool:
                     await self.init_pool()
-                else:
-                    return False
-            
-            async with self.pool.acquire() as conn:
-                await conn.fetchval("SELECT 1")
-                return True
                 
+                import asyncpg
+                async with self.pool.acquire() as connection:
+                    await connection.execute("SELECT 1")
+                return True
         except Exception as e:
             logger.error(f"Database connection check failed: {str(e)}")
             return False
     
-    async def close(self):
-        """Fechar pool de conexões"""
-        if self.pool:
-            await self.pool.close()
-            logger.info("Database pool closed")
+    async def save_message(self, user_phone: str, message_text: str, message_type: str = "received") -> bool:
+        """Salvar mensagem no banco de dados"""
+        try:
+            if self._use_firebase:
+                return await self.firebase_service.save_message(user_phone, message_text, message_type)
+            else:
+                # PostgreSQL implementation
+                if not self.pool:
+                    await self.init_pool()
+                
+                import asyncpg
+                async with self.pool.acquire() as connection:
+                    await connection.execute(
+                        "INSERT INTO messages (user_phone, message_text, message_type) VALUES ($1, $2, $3)",
+                        user_phone, message_text, message_type
+                    )
+                return True
+        except Exception as e:
+            logger.error(f"Error saving message: {str(e)}")
+            return False
+    
+    async def get_conversation_history(self, user_phone: str, limit: int = 10) -> List[Dict]:
+        """Obter histórico de conversas de um usuário"""
+        try:
+            if self._use_firebase:
+                return await self.firebase_service.get_conversation_history(user_phone, limit)
+            else:
+                # PostgreSQL implementation
+                if not self.pool:
+                    await self.init_pool()
+                
+                import asyncpg
+                async with self.pool.acquire() as connection:
+                    rows = await connection.fetch(
+                        "SELECT message_text, message_type, timestamp FROM messages WHERE user_phone = $1 ORDER BY timestamp DESC LIMIT $2",
+                        user_phone, limit
+                    )
+                    
+                    return [
+                        {
+                            "message": row["message_text"],
+                            "type": row["message_type"],
+                            "timestamp": row["timestamp"].isoformat()
+                        }
+                        for row in rows
+                    ]
+        except Exception as e:
+            logger.error(f"Error getting conversation history: {str(e)}")
+            return []
+    
+    async def save_user_profile(self, user_phone: str, profile_data: Dict[str, Any]) -> bool:
+        """Salvar dados do perfil do usuário"""
+        try:
+            if self._use_firebase:
+                return await self.firebase_service.save_user_profile(user_phone, profile_data)
+            else:
+                # PostgreSQL implementation
+                if not self.pool:
+                    await self.init_pool()
+                
+                import asyncpg, json
+                async with self.pool.acquire() as connection:
+                    await connection.execute(
+                        """
+                        INSERT INTO users (phone_number, name, email, preferences, updated_at) 
+                        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                        ON CONFLICT (phone_number) 
+                        DO UPDATE SET 
+                            name = EXCLUDED.name,
+                            email = EXCLUDED.email,
+                            preferences = EXCLUDED.preferences,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        user_phone,
+                        profile_data.get("name"),
+                        profile_data.get("email"),
+                        json.dumps(profile_data.get("preferences", {}))
+                    )
+                return True
+        except Exception as e:
+            logger.error(f"Error saving user profile: {str(e)}")
+            return False
+    
+    async def get_user_profile(self, user_phone: str) -> Optional[Dict[str, Any]]:
+        """Obter perfil do usuário"""
+        try:
+            if self._use_firebase:
+                return await self.firebase_service.get_user_profile(user_phone)
+            else:
+                # PostgreSQL implementation
+                if not self.pool:
+                    await self.init_pool()
+                
+                import asyncpg
+                async with self.pool.acquire() as connection:
+                    row = await connection.fetchrow(
+                        "SELECT name, email, preferences, created_at, updated_at FROM users WHERE phone_number = $1",
+                        user_phone
+                    )
+                    
+                    if row:
+                        return {
+                            "name": row["name"],
+                            "email": row["email"],
+                            "preferences": row["preferences"] or {},
+                            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None
+                        }
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting user profile: {str(e)}")
+            return None
+    
+    async def save_analytics_event(self, event_type: str, user_phone: str, data: Dict[str, Any]) -> bool:
+        """Salvar evento de analytics"""
+        try:
+            if self._use_firebase:
+                return await self.firebase_service.save_analytics_event(event_type, user_phone, data)
+            else:
+                # PostgreSQL implementation
+                if not self.pool:
+                    await self.init_pool()
+                
+                import asyncpg, json
+                async with self.pool.acquire() as connection:
+                    await connection.execute(
+                        "INSERT INTO analytics (event_type, user_phone, event_data) VALUES ($1, $2, $3)",
+                        event_type, user_phone, json.dumps(data)
+                    )
+                return True
+        except Exception as e:
+            logger.error(f"Error saving analytics event: {str(e)}")
+            return False
+
+    # PostgreSQL methods (só usado se não for Firebase)
+    async def init_pool(self):
+        """Inicializar pool de conexões PostgreSQL"""
+        if not self.pool and not self._use_firebase:
+            try:
+                import asyncpg
+                self.pool = await asyncpg.create_pool(self.connection_string)
+                await self.create_tables()
+                logger.info("Database pool initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize database pool: {str(e)}")
+                raise
+    
+    async def create_tables(self):
+        """Criar tabelas PostgreSQL necessárias"""
+        create_messages_table = """
+        CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            user_phone VARCHAR(20) NOT NULL,
+            message_text TEXT NOT NULL,
+            message_type VARCHAR(20) NOT NULL DEFAULT 'received',
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            metadata JSONB DEFAULT '{}'
+        )
+        """
+        
+        create_users_table = """
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            phone_number VARCHAR(20) UNIQUE NOT NULL,
+            name VARCHAR(100),
+            email VARCHAR(100),
+            preferences JSONB DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        
+        create_analytics_table = """
+        CREATE TABLE IF NOT EXISTS analytics (
+            id SERIAL PRIMARY KEY,
+            event_type VARCHAR(50) NOT NULL,
+            user_phone VARCHAR(20),
+            event_data JSONB DEFAULT '{}',
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        
+        import asyncpg
+        async with self.pool.acquire() as connection:
+            await connection.execute(create_messages_table)
+            await connection.execute(create_users_table)
+            await connection.execute(create_analytics_table)

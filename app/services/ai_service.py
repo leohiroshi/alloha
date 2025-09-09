@@ -43,10 +43,10 @@ class AIService:
             # Analisar intenção do usuário
             intent = await self._analyze_intent(message)
             
-            # Recuperar contexto da conversa
-            context = self._get_conversation_context(user_phone)
+            # Recuperar contexto da conversa do Firebase
+            context = await self._get_conversation_context_from_db(user_phone)
             
-            # Atualizar contexto
+            # Atualizar contexto em memória
             self._update_conversation_context(user_phone, message, intent)
             
             # Gerar resposta baseada na intenção e contexto
@@ -57,6 +57,43 @@ class AIService:
         except Exception as e:
             logger.error(f"Error generating AI response: {str(e)}")
             return "Desculpe, houve um problema. Tente novamente em alguns instantes."
+    
+    async def _get_conversation_context_from_db(self, user_phone: str) -> Dict:
+        """Recuperar contexto da conversa do banco de dados"""
+        try:
+            # Importar aqui para evitar importação circular
+            from app.services.database_service import DatabaseService
+            
+            db_service = DatabaseService()
+            
+            # Obter histórico de conversas
+            history = await db_service.get_conversation_history(user_phone, limit=5)
+            
+            # Processar histórico para criar contexto
+            conversation_context = {
+                "messages": history,
+                "user_phone": user_phone,
+                "message_count": len(history),
+                "recent_topics": []
+            }
+            
+            # Extrair tópicos recentes das mensagens
+            for msg in history:
+                if msg.get("type") == "received":
+                    # Analisar mensagem para extrair tópicos
+                    if any(word in msg.get("message", "").lower() for word in ["casa", "apartamento", "imóvel", "propriedade"]):
+                        conversation_context["recent_topics"].append("imoveis")
+                    elif any(word in msg.get("message", "").lower() for word in ["preço", "valor", "custo", "quanto"]):
+                        conversation_context["recent_topics"].append("precos")
+                    elif any(word in msg.get("message", "").lower() for word in ["visita", "agendar", "ver", "mostrar"]):
+                        conversation_context["recent_topics"].append("agendamento")
+            
+            return conversation_context
+            
+        except Exception as e:
+            logger.error(f"Error getting conversation context from DB: {str(e)}")
+            # Fallback para contexto em memória
+            return self._get_conversation_context(user_phone)
     
     async def _analyze_intent(self, message: str) -> Dict:
         """Analisar intenção da mensagem"""
