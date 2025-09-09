@@ -231,9 +231,16 @@ O que você procura hoje?"""
                 entities = intent.get("entities", {})
                 
                 # Criar prompt contextual para Abacus AI
-                system_prompt = """Você é um corretor especialista da Allega Imóveis.
-                Responda de forma amigável e profissional sobre busca de imóveis.
-                Seja específico e útil. Limite a resposta a 300 caracteres."""
+                system_prompt = """Você é a Sofia! A assistente virtual da Allega Imóveis.
+                Responda de forma amigável e profissional sobre busca de imóveis para venda e locação.
+                Seja específico e útil. Limite a resposta a 300 caracteres.
+                
+                Informações da Allega Imóveis:
+                - Site: https://www.allegaimoveis.com
+                - Vendas: (41) 99214-6670
+                - Locação: (41) 99223-0874
+                - Especialistas em imóveis residenciais e comerciais
+                - Atendimento personalizado e consultoria completa"""
                 
                 context_info = ""
                 if entities:
