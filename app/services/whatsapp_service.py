@@ -1,7 +1,8 @@
 import aiohttp
 import logging
 import json
-from typing import Optional
+import base64
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,82 @@ class WhatsAppService:
         except Exception as e:
             logger.error(f"Error sending WhatsApp message: {str(e)}")
             return False
+    
+    async def download_media(self, media_id: str) -> Optional[bytes]:
+        """Download de mídia (imagem) do WhatsApp"""
+        try:
+            # Primeiro, obter URL da mídia
+            media_url_endpoint = f"https://graph.facebook.com/v18.0/{media_id}"
+            
+            async with aiohttp.ClientSession() as session:
+                # Obter URL da mídia
+                async with session.get(media_url_endpoint, headers={"Authorization": f"Bearer {self.access_token}"}) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to get media URL: {response.status}")
+                        return None
+                    
+                    media_data = await response.json()
+                    media_url = media_data.get("url")
+                    
+                    if not media_url:
+                        logger.error("No media URL found")
+                        return None
+                
+                # Download da mídia
+                async with session.get(media_url, headers={"Authorization": f"Bearer {self.access_token}"}) as response:
+                    if response.status == 200:
+                        media_content = await response.read()
+                        logger.info(f"Media downloaded successfully: {len(media_content)} bytes")
+                        return media_content
+                    else:
+                        logger.error(f"Failed to download media: {response.status}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"Error downloading media: {str(e)}")
+            return None
+    
+    def extract_media_info(self, webhook_data: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Extrai informações de mídia do webhook"""
+        try:
+            entry = webhook_data.get("entry", [])[0]
+            changes = entry.get("changes", [])[0]
+            value = changes.get("value", {})
+            
+            if "messages" not in value:
+                return None
+            
+            message = value["messages"][0]
+            
+            # Verificar se é imagem
+            if message.get("type") == "image":
+                image_info = message.get("image", {})
+                return {
+                    "media_id": image_info.get("id"),
+                    "mime_type": image_info.get("mime_type", "image/jpeg"),
+                    "caption": image_info.get("caption", ""),
+                    "message_type": "image"
+                }
+            
+            # Verificar se é documento (pode ser imagem)
+            elif message.get("type") == "document":
+                doc_info = message.get("document", {})
+                mime_type = doc_info.get("mime_type", "")
+                
+                if mime_type.startswith("image/"):
+                    return {
+                        "media_id": doc_info.get("id"),
+                        "mime_type": mime_type,
+                        "caption": doc_info.get("caption", ""),
+                        "filename": doc_info.get("filename", ""),
+                        "message_type": "document_image"
+                    }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error extracting media info: {str(e)}")
+            return None
     
     async def send_template_message(self, to: str, template_name: str, language_code: str = "pt_BR") -> bool:
         """Enviar mensagem template via WhatsApp"""

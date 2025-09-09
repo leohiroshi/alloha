@@ -3,9 +3,10 @@ from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
+from datetime import datetime
+from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
-from app.services.ai_service import AIService
-from app.services.database_service import DatabaseService
+from app.services.intelligent_bot import intelligent_bot
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -13,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 # Criar instância do FastAPI
 app = FastAPI(
-    title="Alloha WhatsApp Bot",
-    description="AI-powered real estate WhatsApp bot",
-    version="1.0.0"
+    title="Allega Imóveis WhatsApp Bot",
+    description="AI-powered real estate WhatsApp bot with intelligent property search and image analysis",
+    version="2.1.0"
 )
 
 # CORS para desenvolvimento
@@ -34,30 +35,140 @@ PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 
 # Inicializar serviços
 whatsapp_service = WhatsAppService(ACCESS_TOKEN, PHONE_NUMBER_ID)
-ai_service = AIService()
-db_service = DatabaseService()
+
+@app.on_event("startup")
+async def startup_event():
+    """Evento executado na inicialização do app"""
+    logger.info("🚀 Iniciando Allega Imóveis WhatsApp Bot...")
+    
+    # Inicializar o sistema inteligente
+    success = await intelligent_bot.initialize()
+    
+    if success:
+        logger.info("✅ Sistema de inteligência imobiliária iniciado com sucesso!")
+    else:
+        logger.warning("⚠️ Sistema iniciado em modo degradado")
 
 @app.get("/")
 async def root():
     return {
-        "message": "Alloha WhatsApp Bot is running!",
-        "service": "alloha-bot",
-        "version": "1.0.0",
-        "endpoints": ["/webhook", "/health", "/docs"],
+        "message": "Allega Imóveis WhatsApp Bot is running!",
+        "service": "allega-intelligent-bot",
+        "version": "2.1.0",
+        "features": [
+            "Intelligent property search",
+            "Market insights", 
+            "AI-powered conversations",
+            "Firebase integration",
+            "Real estate data scraping",
+            "Image analysis with GPT-4 Vision",
+            "Property availability verification"
+        ],
+        "endpoints": ["/webhook", "/health", "/docs", "/update-properties"],
         "status": "active"
     }
 
 @app.get("/health")
 async def health():
-    return {
-        "status": "healthy", 
-        "service": "alloha-bot",
-        "verify_token_configured": bool(VERIFY_TOKEN),
-        "access_token_configured": bool(ACCESS_TOKEN),
-        "phone_number_configured": bool(PHONE_NUMBER_ID),
-        "database_connected": await db_service.check_connection(),
-        "ai_service_available": ai_service.is_available()
-    }
+    """Check system health status"""
+    try:
+        # Verificar conectividade do Firebase
+        firebase_status = "unknown"
+        try:
+            await intelligent_bot.firebase_service.check_connection()
+            firebase_status = "connected"
+        except:
+            firebase_status = "disconnected"
+        
+        # Verificar dados de propriedades
+        property_data_loaded = bool(intelligent_bot.property_intelligence.property_cache)
+        
+        return {
+            "status": "healthy", 
+            "service": "allega-intelligent-bot",
+            "version": "2.1.0",
+            "verify_token_configured": bool(VERIFY_TOKEN),
+            "access_token_configured": bool(ACCESS_TOKEN),
+            "phone_number_configured": bool(PHONE_NUMBER_ID),
+            "firebase_status": firebase_status,
+            "property_data_loaded": property_data_loaded,
+            "ai_service_available": bool(intelligent_bot.ai_service.api_key),
+            "features": {
+                "property_search": True,
+                "market_insights": True,
+                "conversation_memory": True,
+                "firebase_integration": True,
+                "image_analysis": True,
+                "availability_check": True
+            }
+        }
+    except Exception as e:
+        logger.error(f"Health check error: {str(e)}")
+        return {
+            "status": "degraded",
+            "error": str(e),
+            "service": "allega-intelligent-bot"
+        }
+
+@app.get("/whatsapp/token-status")
+async def check_whatsapp_token_status():
+    """Verificar o status do token do WhatsApp"""
+    try:
+        import aiohttp
+        
+        if not ACCESS_TOKEN or not PHONE_NUMBER_ID:
+            return {
+                "status": "error",
+                "message": "Token ou Phone Number ID não configurados",
+                "access_token_configured": bool(ACCESS_TOKEN),
+                "phone_number_id_configured": bool(PHONE_NUMBER_ID)
+            }
+        
+        # Testar token fazendo uma requisição para o WhatsApp API
+        url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}"
+        headers = {
+            "Authorization": f"Bearer {ACCESS_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                status_code = response.status
+                response_text = await response.text()
+                
+                if status_code == 200:
+                    import json
+                    data = json.loads(response_text)
+                    return {
+                        "status": "valid",
+                        "message": "Token do WhatsApp está válido e ativo",
+                        "phone_number_info": {
+                            "id": data.get("id"),
+                            "display_phone_number": data.get("display_phone_number"),
+                            "verified_name": data.get("verified_name")
+                        },
+                        "token_masked": f"{ACCESS_TOKEN[:10]}...{ACCESS_TOKEN[-10:]}"
+                    }
+                elif status_code == 401:
+                    return {
+                        "status": "expired",
+                        "message": "Token do WhatsApp expirado ou inválido",
+                        "error_details": response_text,
+                        "action_required": "Renovar token no Facebook Developers"
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Erro ao validar token: {status_code}",
+                        "error_details": response_text
+                    }
+    
+    except Exception as e:
+        logger.error(f"Error checking WhatsApp token: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Erro interno ao verificar token: {str(e)}"
+        }
 
 @app.get("/webhook", response_class=PlainTextResponse)
 async def verify_webhook(request: Request):
@@ -102,7 +213,7 @@ async def webhook_handler(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 async def process_whatsapp_message(webhook_data):
-    """Processar mensagem recebida do WhatsApp"""
+    """Processar mensagem recebida do WhatsApp com inteligência avançada e suporte a imagens"""
     try:
         entry = webhook_data.get("entry", [])[0]
         changes = entry.get("changes", [])[0]
@@ -113,39 +224,139 @@ async def process_whatsapp_message(webhook_data):
         
         message = value["messages"][0]
         from_number = message["from"]
+        message_type = message.get("type", "text")
+        
+        logger.info(f"📨 Message from {from_number} - Type: {message_type}")
+        
+        # Verificar se é imagem
+        if message_type == "image" or (message_type == "document" and message.get("document", {}).get("mime_type", "").startswith("image/")):
+            await process_image_message(message, from_number, webhook_data)
+            return
+        
+        # Processar mensagem de texto
         message_text = message.get("text", {}).get("body", "")
         
-        logger.info(f"💬 Message from {from_number}: {message_text}")
+        # Verificar comandos especiais primeiro
+        special_response = await intelligent_bot.handle_special_commands(message_text, from_number)
         
-        # Salvar mensagem no banco
-        await db_service.save_message(from_number, message_text, "received")
+        if special_response:
+            # Enviar resposta de comando especial
+            success = await whatsapp_service.send_message(from_number, special_response)
+            if success:
+                logger.info(f"✅ Special command response sent to {from_number}")
+            return
         
-        # Gerar resposta com IA avançada (agora com contexto)
-        ai_response = await ai_service.generate_response(message_text, from_number)
+        # Processar com sistema inteligente
+        ai_response = await intelligent_bot.process_message(message_text, from_number)
         
-        logger.info(f"🤖 AI Response: {ai_response}")
+        logger.info(f"🤖 AI Response: {ai_response[:100]}...")
         
         # Enviar resposta via WhatsApp
         success = await whatsapp_service.send_message(from_number, ai_response)
         
         if success:
-            # Salvar resposta no banco
-            await db_service.save_message(from_number, ai_response, "sent")
             logger.info(f"✅ Message sent successfully to {from_number}")
         else:
             logger.error(f"❌ Failed to send message to {from_number}")
         
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
+        
+        # Enviar resposta de fallback em caso de erro
+        try:
+            fallback_msg = (
+                "😅 Ops! Tive um probleminha técnico.\n\n"
+                "📞 Entre em contato direto:\n"
+                "• Vendas: (41) 99214-6670\n"
+                "• Locação: (41) 99223-0874"
+            )
+            await whatsapp_service.send_message(from_number, fallback_msg)
+        except:
+            pass
+
+async def process_image_message(message: Dict, from_number: str, webhook_data: Dict):
+    """Processa mensagens com imagens"""
+    try:
+        logger.info(f"📸 Processing image from {from_number}")
+        
+        # Extrair informações da mídia
+        media_info = whatsapp_service.extract_media_info(webhook_data)
+        
+        if not media_info:
+            logger.error("Failed to extract media info")
+            await send_image_error_response(from_number)
+            return
+        
+        media_id = media_info.get("media_id")
+        caption = media_info.get("caption", "")
+        
+        if not media_id:
+            logger.error("No media ID found")
+            await send_image_error_response(from_number)
+            return
+        
+        # Download da imagem
+        image_data = await whatsapp_service.download_media(media_id)
+        
+        if not image_data:
+            logger.error("Failed to download image")
+            await send_image_error_response(from_number)
+            return
+        
+        logger.info(f"📸 Image downloaded: {len(image_data)} bytes")
+        
+        # Verificar se é comando especial para análise de disponibilidade
+        if caption and any(word in caption.lower() for word in ['disponível', 'disponivel', 'status', 'verificar']):
+            # Análise focada em disponibilidade
+            response = await intelligent_bot.check_property_availability_from_image(image_data, from_number)
+        else:
+            # Análise completa da imagem
+            response = await intelligent_bot.process_image_message(image_data, caption, from_number)
+        
+        # Enviar resposta
+        success = await whatsapp_service.send_message(from_number, response)
+        
+        if success:
+            logger.info(f"✅ Image analysis response sent to {from_number}")
+        else:
+            logger.error(f"❌ Failed to send image response to {from_number}")
+        
+    except Exception as e:
+        logger.error(f"Error processing image: {str(e)}")
+        await send_image_error_response(from_number)
+
+async def send_image_error_response(from_number: str):
+    """Envia resposta de erro para problemas com imagem"""
+    try:
+        error_response = (
+            "📸 Recebi sua imagem!\n\n"
+            "😅 Tive dificuldade para processá-la no momento.\n\n"
+            "🏠 *Posso ajudar de outras formas:*\n"
+            "• Descreva o imóvel que procura\n"
+            "• Informe sua região preferida\n"
+            "• Conte sobre seu orçamento\n\n"
+            "📞 *Ou entre em contato direto:*\n"
+            "🏠 Vendas: (41) 99214-6670\n"
+            "🏡 Locação: (41) 99223-0874"
+        )
+        
+        await whatsapp_service.send_message(from_number, error_response)
+        
+    except Exception as e:
+        logger.error(f"Error sending image error response: {str(e)}")
 
 @app.get("/analytics/{user_phone}")
 async def get_user_analytics(user_phone: str):
     """Obter analytics de um usuário específico"""
     try:
-        stats = ai_service.get_conversation_stats(user_phone)
+        # Obter dados do Firebase
+        user_profile = await intelligent_bot.firebase_service.get_user_profile(user_phone)
+        user_stats = await intelligent_bot.firebase_service.get_user_stats(user_phone)
+        
         return {
             "user_phone": user_phone,
-            "analytics": stats,
+            "profile": user_profile,
+            "stats": user_stats,
             "status": "success"
         }
     except Exception as e:
@@ -163,17 +374,135 @@ async def test_ai_response(request: Request):
         if not message:
             raise HTTPException(status_code=400, detail="Message is required")
         
-        response = await ai_service.generate_response(message, user_phone)
+        # Testar com sistema inteligente
+        response = await intelligent_bot.process_message(message, user_phone)
         
         return {
             "input_message": message,
+            "ai_response": response,
+            "user_phone": user_phone,
+            "system": "intelligent_bot",
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error testing AI: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/test-image-analysis")
+async def test_image_analysis(request: Request):
+    """Endpoint para testar análise de imagens"""
+    try:
+        body = await request.json()
+        image_url = body.get("image_url", "")
+        user_phone = body.get("user_phone", "test_user")
+        analysis_type = body.get("analysis_type", "complete")  # complete ou availability
+        
+        if not image_url:
+            raise HTTPException(status_code=400, detail="Image URL is required")
+        
+        # Download da imagem de teste
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_url) as resp:
+                if resp.status == 200:
+                    image_data = await resp.read()
+                else:
+                    raise HTTPException(status_code=400, detail="Failed to download image")
+        
+        # Testar análise
+        if analysis_type == "availability":
+            response = await intelligent_bot.check_property_availability_from_image(image_data, user_phone)
+        else:
+            response = await intelligent_bot.process_image_message(image_data, "", user_phone)
+        
+        return {
+            "image_url": image_url,
+            "analysis_type": analysis_type,
             "ai_response": response,
             "user_phone": user_phone,
             "status": "success"
         }
         
     except Exception as e:
-        logger.error(f"Error testing AI: {str(e)}")
+        logger.error(f"Error testing image analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/update-properties")
+async def update_property_database():
+    """Atualizar base de dados de imóveis"""
+    try:
+        logger.info("🔄 Iniciando atualização manual da base de imóveis...")
+        
+        success = await intelligent_bot.update_property_database()
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "Base de dados de imóveis atualizada com sucesso",
+                "timestamp": str(datetime.now())
+            }
+        else:
+            return {
+                "status": "error", 
+                "message": "Falha na atualização da base de dados",
+                "timestamp": str(datetime.now())
+            }
+            
+    except Exception as e:
+        logger.error(f"Error updating properties: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/properties/stats")
+async def get_property_statistics():
+    """Obter estatísticas dos imóveis"""
+    try:
+        # Carregar dados de propriedades
+        await intelligent_bot.property_intelligence.load_property_data()
+        
+        stats = {}
+        if intelligent_bot.property_intelligence.property_cache:
+            cache = intelligent_bot.property_intelligence.property_cache
+            stats = cache.get('statistics', {})
+        
+        return {
+            "statistics": stats,
+            "cache_status": "loaded" if intelligent_bot.property_intelligence.property_cache else "empty",
+            "last_update": intelligent_bot.property_intelligence.last_cache_update,
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting property stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/system/status")
+async def get_system_status():
+    """Status detalhado do sistema"""
+    try:
+        status_info = await intelligent_bot._get_system_status()
+        
+        return {
+            "detailed_status": status_info,
+            "components": {
+                "whatsapp_service": bool(ACCESS_TOKEN and PHONE_NUMBER_ID),
+                "firebase_service": bool(intelligent_bot.firebase_service),
+                "ai_service": bool(intelligent_bot.ai_service.api_key),
+                "property_intelligence": bool(intelligent_bot.property_intelligence),
+                "image_analyzer": True,  # Novo componente
+            },
+            "environment": {
+                "verify_token_set": bool(VERIFY_TOKEN),
+                "access_token_set": bool(ACCESS_TOKEN),
+                "phone_number_set": bool(PHONE_NUMBER_ID),
+                "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+                "google_vision_api_key_set": bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+            },
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting system status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

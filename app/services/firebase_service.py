@@ -211,6 +211,87 @@ class FirebaseService:
         except Exception as e:
             logger.error(f"❌ Erro ao obter stats: {str(e)}")
             return {"total_messages": 0, "first_contact": None, "last_contact": None}
+    
+    async def save_property_data(self, property_data: dict) -> bool:
+        """Salva dados de imóveis no Firebase"""
+        try:
+            if not self.db:
+                return False
+                
+            # Salvar dados principais de imóveis
+            properties_ref = self.db.collection('properties')
+            doc_ref = properties_ref.document('allega_data')
+            
+            data_to_save = {
+                'data': property_data,
+                'last_updated': datetime.now(),
+                'source': 'allega_scraper'
+            }
+            
+            doc_ref.set(data_to_save)
+            logger.info("📊 Dados de imóveis salvos no Firebase")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar dados de imóveis: {str(e)}")
+            return False
+    
+    async def get_property_data(self) -> dict:
+        """Obtém dados de imóveis do Firebase"""
+        try:
+            if not self.db:
+                return {}
+                
+            doc_ref = self.db.collection('properties').document('allega_data')
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                data = doc.to_dict()
+                return data.get('data', {})
+            else:
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ Erro ao obter dados de imóveis: {str(e)}")
+            return {}
+    
+    async def save_property_search(self, user_id: str, criteria: dict, results_count: int) -> bool:
+        """Salva busca de imóveis para analytics"""
+        try:
+            if not self.db:
+                return False
+                
+            search_data = {
+                'user_id': user_id,
+                'criteria': criteria,
+                'results_count': results_count,
+                'timestamp': datetime.now(),
+                'type': 'property_search'
+            }
+            
+            # Salvar na coleção de buscas
+            self.db.collection('property_searches').add(search_data)
+            
+            # Atualizar contador do usuário se existir
+            try:
+                user_ref = self.db.collection('users').document(user_id)
+                user_doc = user_ref.get()
+                if user_doc.exists:
+                    current_data = user_doc.to_dict()
+                    analytics = current_data.get('analytics', {})
+                    analytics['property_searches'] = analytics.get('property_searches', 0) + 1
+                    analytics['last_property_search'] = datetime.now()
+                    
+                    user_ref.update({'analytics': analytics})
+            except Exception:
+                pass  # Ignore if user doesn't exist
+            
+            logger.info(f"🔍 Busca de imóveis salva para usuário {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar busca de imóveis: {str(e)}")
+            return False
 
 # Instância global
 firebase_service = FirebaseService()

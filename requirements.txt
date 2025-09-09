@@ -7,3 +7,30 @@ python-multipart==0.0.6
 python-dotenv==1.0.0
 firebase-admin==6.2.0
 google-cloud-firestore==2.11.1
+
+# Web scraping
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# AI/ML
+openai==1.3.5
+google-cloud-vision==3.4.5
+Pillow==10.1.0
+
+# Image processing
+base64
+
+# Async utilities
+asyncio-mqtt==0.16.1
+
+# JSON handling
+orjson==3.9.10
+
+# Date/time utilities
+python-dateutil==2.8.2
+
+# Logging
+colorlog==6.8.0
+
+# Environment variables
+python-decouple==3.8

@@ -21,6 +21,9 @@ class AIService:
         # Cache de conversas por usuário
         self.conversation_context = {}
         
+        # Importar property_intelligence de forma lazy para evitar importação circular
+        self._property_intelligence = None
+        
         # Base de conhecimento sobre imóveis
         self.property_knowledge = {
             "tipos": ["apartamento", "casa", "kitnet", "studio", "cobertura", "terreno", "comercial"],
@@ -33,6 +36,17 @@ class AIService:
             },
             "caracteristicas": ["quartos", "banheiros", "vagas", "area", "piscina", "churrasqueira"]
         }
+    
+    @property
+    def property_intelligence(self):
+        """Lazy loading da property intelligence para evitar importação circular"""
+        if self._property_intelligence is None:
+            try:
+                from .property_intelligence import property_intelligence
+                self._property_intelligence = property_intelligence
+            except ImportError:
+                self._property_intelligence = None
+        return self._property_intelligence
     
     async def generate_response(self, message: str, user_phone: str) -> str:
         """Gerar resposta inteligente usando Abacus AI com contexto"""
@@ -204,29 +218,47 @@ O que você procura hoje?"""
             return "Olá novamente! Como posso ajudá-lo hoje? 😊"
     
     async def _handle_property_search(self, message: str, intent: Dict, context: Dict) -> str:
-        """Lidar com busca por imóveis"""
-        entities = intent.get("entities", {})
-        
-        # Criar prompt contextual para Abacus AI
-        system_prompt = """Você é um corretor especialista da Alloha Imóveis.
-        Responda de forma amigável e profissional sobre busca de imóveis.
-        Seja específico e útil. Limite a resposta a 300 caracteres."""
-        
-        context_info = ""
-        if entities:
-            context_info = f"Cliente interessado em: {entities}"
-        
-        user_prompt = f"""Cliente busca imóvel: {message}
-        Contexto: {context_info}
-        
-        Forneça uma resposta útil sobre opções disponíveis."""
-        
-        ai_response = await self._call_abacus_api(system_prompt, user_prompt)
-        
-        if ai_response:
-            return ai_response
-        
-        # Fallback response
+        """Lidar com busca por imóveis usando inteligência imobiliária"""
+        try:
+            # Verificar se temos property_intelligence disponível
+            if self.property_intelligence:
+                # Usar o sistema de inteligência imobiliária
+                user_id = context.get('user_phone', 'unknown')
+                response = await self.property_intelligence.process_property_inquiry(message, user_id)
+                return response
+            else:
+                # Fallback para resposta básica
+                entities = intent.get("entities", {})
+                
+                # Criar prompt contextual para Abacus AI
+                system_prompt = """Você é um corretor especialista da Allega Imóveis.
+                Responda de forma amigável e profissional sobre busca de imóveis.
+                Seja específico e útil. Limite a resposta a 300 caracteres."""
+                
+                context_info = ""
+                if entities:
+                    context_info = f"Cliente interessado em: {entities}"
+                
+                user_prompt = f"""Cliente busca imóvel: {message}
+                Contexto: {context_info}
+                
+                Responda oferecendo ajuda e pedindo mais detalhes específicos."""
+                
+                # Tentar usar Abacus AI
+                response = await self._call_abacus_ai(system_prompt, user_prompt)
+                
+                if response:
+                    return response
+                else:
+                    # Resposta de fallback
+                    return self._get_property_search_fallback(message, entities)
+                    
+        except Exception as e:
+            logger.error(f"Erro em _handle_property_search: {str(e)}")
+            return "🏠 Entendi que você procura um imóvel! Pode me contar mais detalhes como tipo (casa/apartamento), quantos quartos, região preferida e faixa de preço? Assim posso ajudar melhor!"
+    
+    def _get_property_search_fallback(self, message: str, entities: Dict) -> str:
+        """Resposta de fallback para busca de imóveis"""
         response = "🔍 Ótimo! Vamos encontrar o imóvel ideal para você.\n\n"
         
         if "property_type" in entities:
