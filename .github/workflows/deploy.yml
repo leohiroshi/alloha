@@ -64,6 +64,7 @@ jobs:
             "DATABASE_URL=${{ secrets.DATABASE_URL }}" \
             "SECRET_KEY=${{ secrets.SECRET_KEY }}" \
             "FIREBASE_CREDENTIALS=secretref:firebase-credentials" \
+            "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" \
             "AI_PROVIDER=abacus" \
             "ENVIRONMENT=production" \
             "HOST=0.0.0.0" \

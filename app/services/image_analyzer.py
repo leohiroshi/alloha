@@ -34,31 +34,49 @@ class PropertyImageAnalyzer:
         # Prompts especializados para análise de imóveis
         self.analysis_prompts = {
             'property_details': """
-            Analise esta imagem de imóvel e extraia as seguintes informações:
+            Você é um especialista em avaliação de imóveis brasileiros. Analise esta imagem e extraia:
             
-            1. TIPO DE IMÓVEL (apartamento, casa, comercial, terreno)
-            2. CARACTERÍSTICAS VISÍVEIS:
-               - Número de quartos (se visível)
-               - Número de banheiros (se visível)
-               - Área aproximada
-               - Estado de conservação
-               - Mobiliado/não mobiliado
-            3. LOCALIZAÇÃO E CONTEXTO:
-               - Tipo de vizinhança (residencial, comercial, etc.)
-               - Qualidade da construção
-               - Acabamentos (básico, médio, alto padrão)
-            4. ELEMENTOS DE MARKETING:
-               - Há placas ou sinais de venda/locação?
-               - Informações de contato visíveis?
-               - Preços mencionados?
-               - Nome da imobiliária?
-            5. ESTADO DE DISPONIBILIDADE:
-               - Imóvel parece habitado ou vazio?
-               - Sinais de "vendido" ou "alugado"?
-               - Indicadores de disponibilidade
+            🏠 IDENTIFICAÇÃO DO IMÓVEL:
+            - Tipo: apartamento, casa, sobrado, kitnet, studio, cobertura, terreno, comercial
+            - Estilo arquitetônico: moderno, clássico, colonial, contemporâneo
             
-            Responda em formato JSON estruturado em português.
-            """,
+            📐 CARACTERÍSTICAS FÍSICAS:
+            - Número de quartos (estimativa baseada no que vê)
+            - Número de banheiros (se visível)
+            - Área aproximada em m²
+            - Pé-direito (alto, médio, baixo)
+            - Layout (integrado, compartimentado)
+            
+            🎨 ACABAMENTOS E CONSERVAÇÃO:
+            - Estado: novo, semi-novo, usado, precisa reforma
+            - Qualidade dos acabamentos: básico, médio, alto padrão, luxo
+            - Materiais visíveis: porcelanato, cerâmica, madeira, mármore
+            - Pintura e conservação geral
+            
+            🌟 DIFERENCIAIS E COMODIDADES:
+            - Mobiliado/semi-mobiliado/vazio
+            - Varanda, sacada, terraço
+            - Churrasqueira, piscina, jardim
+            - Garagem, vaga coberta
+            - Vista (mar, cidade, parque)
+            
+            🏘️ CONTEXTO E LOCALIZAÇÃO:
+            - Tipo de vizinhança: residencial, comercial, mista
+            - Indicadores de localização: prédios ao fundo, comércio próximo
+            - Densidade urbana: centro, bairro residencial, periferia
+            
+            💰 SINAIS DE COMERCIALIZAÇÃO:
+            - Placas de venda/locação visíveis
+            - Nome da imobiliária ou corretor
+            - Telefones ou contatos
+            - Preços mencionados
+            - Status: à venda, alugado, vendido
+            
+            🎯 PÚBLICO-ALVO SUGERIDO:
+            - Ideal para: solteiros, casais, famílias, investidores
+            - Faixa de preço estimada para o mercado brasileiro
+            
+            Responda em português brasileiro, formato JSON estruturado, sendo específico e útil para corretores imobiliários.""",
             
             'availability_check': """
             Analise esta imagem especificamente para determinar a DISPONIBILIDADE do imóvel:
@@ -110,36 +128,194 @@ class PropertyImageAnalyzer:
     async def analyze_property_image(self, image_data: bytes, analysis_type: str = "complete") -> Dict[str, Any]:
         """Analisa imagem de imóvel com IA"""
         try:
-            # Converter imagem para base64
-            image_base64 = base64.b64encode(image_data).decode('utf-8')
+            # 1. ANÁLISE GRATUITA BÁSICA
+            from .free_image_analyzer import free_analyzer
+            basic_analysis = await free_analyzer.analyze_property_image_free(image_data)
             
-            # Analisar com OpenAI Vision (GPT-4V)
-            openai_result = await self._analyze_with_openai(image_base64, analysis_type)
+            # 2. TENTAR APIs PAGAS (se configuradas)
+            advanced_analysis = None
             
-            # Tentar análise com Google Vision como backup
-            google_result = await self._analyze_with_google_vision(image_data)
+            # OpenAI Vision (se configurado)
+            if self.openai_api_key:
+                image_base64 = base64.b64encode(image_data).decode('utf-8')
+                advanced_analysis = await self._analyze_with_openai(image_base64, analysis_type)
             
-            # Combinar resultados
-            analysis_result = self._combine_analysis_results(openai_result, google_result)
+            # Google Vision (se configurado)
+            elif self.google_vision_key:
+                advanced_analysis = await self._analyze_with_google_vision(image_data)
+            
+            # 3. USAR ABACUS PARA ANÁLISE CONTEXTUAL (GRATUITO)
+            abacus_analysis = await self._analyze_with_abacus_description(basic_analysis)
+            
+            # 4. COMBINAR RESULTADOS
+            final_analysis = self._combine_free_and_ai_analysis(
+                basic_analysis, 
+                advanced_analysis, 
+                abacus_analysis
+            )
             
             # Adicionar metadados
-            analysis_result['metadata'] = {
+            final_analysis['metadata'] = {
                 'analyzed_at': datetime.now().isoformat(),
                 'analysis_type': analysis_type,
-                'confidence_score': self._calculate_confidence(analysis_result),
-                'apis_used': ['openai'] if openai_result else [] + ['google'] if google_result else []
+                'methods_used': self._get_used_methods(basic_analysis, advanced_analysis, abacus_analysis),
+                'confidence_score': self._calculate_confidence(final_analysis),
+                'cost': 'Gratuito' if not advanced_analysis else 'Pago + Gratuito'
             }
             
-            logger.info(f"Imagem analisada com sucesso - Tipo: {analysis_type}")
-            return analysis_result
+            logger.info(f"Imagem analisada - Tipo: {analysis_type}, Métodos: {final_analysis['metadata']['methods_used']}")
+            return final_analysis
             
         except Exception as e:
             logger.error(f"Erro na análise de imagem: {str(e)}")
             return {
                 'error': str(e),
                 'success': False,
+                'fallback_analysis': 'Análise básica indisponível',
                 'metadata': {'analyzed_at': datetime.now().isoformat()}
             }
+    
+    async def _analyze_with_abacus_description(self, basic_analysis: Dict) -> Dict:
+        """Usar Abacus AI para analisar descrição da imagem (GRATUITO)"""
+        try:
+            # Importar AI service
+            from .ai_service import AIService
+            ai_service = AIService()
+            
+            # Criar descrição baseada na análise básica
+            description = self._create_description_from_basic_analysis(basic_analysis)
+            
+            # Prompt para Abacus analisar a descrição
+            system_prompt = """Você é um especialista em avaliação de imóveis. 
+            Baseado na descrição técnica de uma foto de imóvel, forneça uma análise detalhada.
+            Seja específico sobre tipo de imóvel, características e recomendações.
+            Responda em português brasileiro, formato estruturado."""
+            
+            user_prompt = f"""Analise esta descrição de foto de imóvel:
+            
+            {description}
+            
+            Forneça:
+            1. Tipo de imóvel mais provável
+            2. Características sugeridas
+            3. Qualidade da foto para marketing
+            4. Recomendações para melhorar
+            5. Público-alvo sugerido"""
+            
+            abacus_response = await ai_service._call_abacus_api(system_prompt, user_prompt)
+            
+            if abacus_response:
+                return {
+                    'abacus_analysis': abacus_response,
+                    'method': 'Abacus AI + Análise Básica',
+                    'success': True
+                }
+            else:
+                return {'method': 'Abacus indisponível', 'success': False}
+                
+        except Exception as e:
+            logger.error(f"Erro no Abacus analysis: {str(e)}")
+            return {'error': str(e), 'method': 'Abacus falhou', 'success': False}
+    
+    def _create_description_from_basic_analysis(self, basic_analysis: Dict) -> str:
+        """Criar descrição textual da análise básica para o Abacus"""
+        description_parts = []
+        
+        # Informações básicas
+        if 'dimensoes' in basic_analysis:
+            dims = basic_analysis['dimensoes']
+            description_parts.append(f"Imagem de {dims['largura']}x{dims['altura']} pixels")
+            description_parts.append(f"Proporção {dims['proporcao']} ({basic_analysis.get('caracteristicas_visuais', {}).get('orientacao', 'desconhecida')})")
+        
+        # Qualidade
+        if 'qualidade_estimada' in basic_analysis:
+            qual = basic_analysis['qualidade_estimada']
+            description_parts.append(f"Qualidade: {qual.get('classificacao', 'não avaliada')}")
+            description_parts.append(f"Brilho: {qual.get('brilho', 'N/A')}, Contraste: {qual.get('contraste', 'N/A')}")
+        
+        # Características visuais
+        if 'caracteristicas_visuais' in basic_analysis:
+            vis = basic_analysis['caracteristicas_visuais']
+            description_parts.append(f"Resolução: {vis.get('resolucao', 'desconhecida')}")
+            if 'cores' in vis:
+                description_parts.append(f"Variedade de cores: {vis['cores'].get('variedade_cores', 'não analisada')}")
+        
+        # Sugestões de tipo
+        if 'sugestoes_imovel' in basic_analysis:
+            sug = basic_analysis['sugestoes_imovel']
+            if 'sugestoes' in sug:
+                description_parts.append(f"Sugestões de tipo: {', '.join(sug['sugestoes'])}")
+        
+        # Formato do arquivo
+        if 'formato' in basic_analysis:
+            description_parts.append(f"Formato: {basic_analysis['formato']}")
+        
+        return ". ".join(description_parts) + "."
+    
+    def _combine_free_and_ai_analysis(self, basic: Dict, advanced: Optional[Dict], abacus: Dict) -> Dict:
+        """Combinar análises gratuitas e pagas"""
+        combined = {
+            'analysis_summary': 'Análise Combinada - Gratuita + IA',
+            'basic_analysis': basic,
+            'abacus_insights': abacus,
+            'success': True
+        }
+        
+        # Adicionar análise avançada se disponível
+        if advanced:
+            combined['advanced_analysis'] = advanced
+            combined['analysis_summary'] = 'Análise Completa - Gratuita + IA Avançada'
+        
+        # Criar resumo executivo
+        combined['executive_summary'] = self._create_executive_summary(basic, advanced, abacus)
+        
+        return combined
+    
+    def _create_executive_summary(self, basic: Dict, advanced: Optional[Dict], abacus: Dict) -> Dict:
+        """Criar resumo executivo da análise"""
+        summary = {
+            'quality_assessment': 'Não avaliada',
+            'property_type_suggestion': 'Não identificado',
+            'marketing_readiness': 'Não avaliada',
+            'recommendations': []
+        }
+        
+        # Da análise básica
+        if 'qualidade_estimada' in basic:
+            summary['quality_assessment'] = basic['qualidade_estimada'].get('classificacao', 'Não avaliada')
+        
+        if 'sugestoes_imovel' in basic:
+            suggestions = basic['sugestoes_imovel'].get('sugestoes', [])
+            if suggestions:
+                summary['property_type_suggestion'] = suggestions[0]
+        
+        if 'recomendacoes' in basic:
+            summary['recommendations'].extend(basic['recomendacoes'])
+        
+        # Do Abacus
+        if abacus.get('success') and 'abacus_analysis' in abacus:
+            summary['ai_insights'] = abacus['abacus_analysis'][:200] + "..." if len(abacus['abacus_analysis']) > 200 else abacus['abacus_analysis']
+        
+        # Da análise avançada (se disponível)
+        if advanced:
+            summary['advanced_features'] = 'Análise detalhada disponível'
+        
+        return summary
+    
+    def _get_used_methods(self, basic: Dict, advanced: Optional[Dict], abacus: Dict) -> list:
+        """Listar métodos de análise utilizados"""
+        methods = ['Análise Básica Gratuita']
+        
+        if abacus.get('success'):
+            methods.append('Abacus AI (Gratuito)')
+        
+        if advanced:
+            if 'openai' in str(advanced).lower():
+                methods.append('OpenAI Vision (Pago)')
+            elif 'google' in str(advanced).lower():
+                methods.append('Google Vision (Pago)')
+        
+        return methods
     
     async def _analyze_with_openai(self, image_base64: str, analysis_type: str) -> Optional[Dict]:
         """Análise com OpenAI GPT-4 Vision"""
