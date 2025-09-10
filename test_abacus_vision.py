@@ -17,7 +17,8 @@ class AbacusImageTester:
     
     def __init__(self):
         self.api_key = os.getenv("ABACUS_API_KEY", "")
-        self.base_url = "https://api.abacus.ai"
+        # URL base descoberta para endpoints de visão
+        self.base_url = "https://apps.abacus.ai/api/v0"
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -27,14 +28,89 @@ class AbacusImageTester:
         """Testar se Abacus suporta análise de imagem"""
         
         results = {
-            "base64_test": await self._test_base64_image_input(image_data),
             "vision_endpoints": await self._test_vision_endpoints(image_data),
+            "classify_image": await self._test_classify_image(image_data),
+            "describe_image": await self._test_describe_image(image_data),
+            "get_objects": await self._test_get_objects_from_image(image_data),
+            "base64_test": await self._test_base64_image_input(image_data),
             "multimodal_test": await self._test_multimodal_input(image_data),
             "available_models": await self._get_available_models()
         }
         
         return results
     
+    async def _test_classify_image(self, image_data: bytes) -> Dict[str, Any]:
+        """Testar endpoint /classifyImage"""
+        try:
+            image_b64 = base64.b64encode(image_data).decode()
+            
+            payload = {
+                "image": image_b64
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/classifyImage",
+                    headers=self.headers,
+                    json=payload
+                ) as response:
+                    result = await response.text()
+                    return {
+                        "status": response.status,
+                        "response": result,
+                        "success": response.status == 200
+                    }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+    
+    async def _test_describe_image(self, image_data: bytes) -> Dict[str, Any]:
+        """Testar endpoint /describeImage"""
+        try:
+            image_b64 = base64.b64encode(image_data).decode()
+            
+            payload = {
+                "image": image_b64
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/describeImage",
+                    headers=self.headers,
+                    json=payload
+                ) as response:
+                    result = await response.text()
+                    return {
+                        "status": response.status,
+                        "response": result,
+                        "success": response.status == 200
+                    }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+    
+    async def _test_get_objects_from_image(self, image_data: bytes) -> Dict[str, Any]:
+        """Testar endpoint /getObjectsFromImage"""
+        try:
+            image_b64 = base64.b64encode(image_data).decode()
+            
+            payload = {
+                "image": image_b64
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/getObjectsFromImage",
+                    headers=self.headers,
+                    json=payload
+                ) as response:
+                    result = await response.text()
+                    return {
+                        "status": response.status,
+                        "response": result,
+                        "success": response.status == 200
+                    }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
     async def _test_base64_image_input(self, image_data: bytes) -> Dict[str, Any]:
         """Testar entrada de imagem em base64"""
         try:

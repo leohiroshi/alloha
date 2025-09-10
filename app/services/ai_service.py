@@ -3,7 +3,7 @@ import logging
 import os
 import json
 import re
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -422,62 +422,110 @@ Como posso ajudá-lo hoje?"""
             }
 
     async def analyze_image_with_abacus(self, image_base64: str, prompt: str = "") -> Optional[str]:
-        """Analisar imagem usando Abacus AI (se suportado)"""
+        """Analisar imagem usando endpoints específicos do Abacus AI"""
         if not self.api_key:
             return None
             
         try:
-            # Prompt padrão se não fornecido
-            if not prompt:
-                prompt = """Analise esta imagem de imóvel brasileiro e forneça:
-                1. Tipo de imóvel (casa, apartamento, etc.)
-                2. Características visíveis
-                3. Estado de conservação
-                4. Qualidade para marketing imobiliário
-                
-                Seja específico e útil para corretores."""
+            # Primeiro tenta o endpoint de descrição de imagem
+            result = await self._call_abacus_describe_image(image_base64)
+            if result.get("success"):
+                logger.info("✅ Análise de imagem com Abacus /describeImage realizada!")
+                return result.get("content")
             
-            # Tentar formato vision
-            payload = {
-                "model": "gpt-4-vision-preview",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_base64}",
-                                    "detail": "low"  # Para economizar tokens
-                                }
-                            }
-                        ]
-                    }
-                ],
-                "max_tokens": 300,
-                "temperature": 0.1
-            }
+            # Se falhar, tenta classificar
+            result = await self._call_abacus_classify_image(image_base64)
+            if result.get("success"):
+                logger.info("✅ Análise de imagem com Abacus /classifyImage realizada!")
+                return result.get("content")
+                
+            # Por último, tenta detectar objetos
+            result = await self._call_abacus_get_objects(image_base64)
+            if result.get("success"):
+                logger.info("✅ Análise de imagem com Abacus /getObjectsFromImage realizada!")
+                return result.get("content")
+                
+            logger.warning("❌ Nenhum endpoint de visão do Abacus funcionou")
+            return None
+                        
+        except Exception as e:
+            logger.error(f"Erro ao analisar imagem com Abacus: {e}")
+            return None
+    
+    async def _call_abacus_describe_image(self, image_b64: str) -> Dict[str, Any]:
+        """Chama o endpoint /describeImage do Abacus"""
+        try:
+            payload = {"image": image_b64}
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=self.headers,
+                    "https://apps.abacus.ai/api/v0/describeImage",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=20)
                 ) as response:
-                    
-                    if response.status == 200:
-                        data = await response.json()
-                        content = data["choices"][0]["message"]["content"]
-                        logger.info("✅ Análise de imagem com Abacus realizada!")
-                        return content
-                    else:
-                        error_text = await response.text()
-                        logger.warning(f"Abacus vision failed: {response.status} - {error_text}")
-                        return None
-                        
+                    result = await response.text()
+                    return {
+                        "status": response.status,
+                        "content": result,
+                        "success": response.status == 200,
+                        "method": "describe_image"
+                    }
         except Exception as e:
+            return {"error": str(e), "success": False}
+    
+    async def _call_abacus_classify_image(self, image_b64: str) -> Dict[str, Any]:
+        """Chama o endpoint /classifyImage do Abacus"""
+        try:
+            payload = {"image": image_b64}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://apps.abacus.ai/api/v0/classifyImage",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=20)
+                ) as response:
+                    result = await response.text()
+                    return {
+                        "status": response.status,
+                        "content": result,
+                        "success": response.status == 200,
+                        "method": "classify_image"
+                    }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+    
+    async def _call_abacus_get_objects(self, image_b64: str) -> Dict[str, Any]:
+        """Chama o endpoint /getObjectsFromImage do Abacus"""
+        try:
+            payload = {"image": image_b64}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://apps.abacus.ai/api/v0/getObjectsFromImage",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=20)
+                ) as response:
+                    result = await response.text()
+                    return {
+                        "status": response.status,
+                        "content": result,
+                        "success": response.status == 200,
+                        "method": "get_objects"
+                    }
+        except Exception as e:
+            return {"error": str(e), "success": False}
             logger.error(f"Erro na análise de imagem com Abacus: {str(e)}")
             return None
 
