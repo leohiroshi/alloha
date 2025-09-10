@@ -1,3 +1,5 @@
+# Integração do PropertyImageAnalyzer com main.py
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +9,9 @@ from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
+# Importar o PropertyImageAnalyzer
+from app.services.property_image_analyzer import property_image_analyzer
+from app.services.chatbot_imoveis import property_chatbot
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -305,13 +310,25 @@ async def process_image_message(message: Dict, from_number: str, webhook_data: D
         
         logger.info(f"📸 Image downloaded: {len(image_data)} bytes")
         
-        # Verificar se é comando especial para análise de disponibilidade
-        if caption and any(word in caption.lower() for word in ['disponível', 'disponivel', 'status', 'verificar']):
-            # Análise focada em disponibilidade
-            response = await intelligent_bot.check_property_availability_from_image(image_data, from_number)
-        else:
-            # Análise completa da imagem
-            response = await intelligent_bot.process_image_message(image_data, caption, from_number)
+        # NOVA INTEGRAÇÃO: Usar PropertyChatbot para análise de imagens
+        try:
+            # Usar o chatbot integrado com PropertyImageAnalyzer
+            response = await property_chatbot.process_message(
+                user_id=from_number,
+                message=caption or "Analisar imóvel",
+                image_data=image_data
+            )
+            
+            logger.info(f"✅ PropertyChatbot analysis completed for {from_number}")
+            
+        except Exception as analyzer_error:
+            logger.error(f"PropertyChatbot error: {str(analyzer_error)}")
+            
+            # Fallback para o sistema original
+            if caption and any(word in caption.lower() for word in ['disponível', 'disponivel', 'status', 'verificar']):
+                response = await intelligent_bot.check_property_availability_from_image(image_data, from_number)
+            else:
+                response = await intelligent_bot.process_image_message(image_data, caption, from_number)
         
         # Enviar resposta
         success = await whatsapp_service.send_message(from_number, response)
@@ -410,11 +427,26 @@ async def test_image_analysis(request: Request):
                 else:
                     raise HTTPException(status_code=400, detail="Failed to download image")
         
-        # Testar análise
-        if analysis_type == "availability":
-            response = await intelligent_bot.check_property_availability_from_image(image_data, user_phone)
-        else:
-            response = await intelligent_bot.process_image_message(image_data, "", user_phone)
+        # NOVA INTEGRAÇÃO: Testar com PropertyChatbot
+        try:
+            # Determinar mensagem baseada no tipo de análise
+            test_message = "verificar disponibilidade" if analysis_type == "availability" else "analisar imóvel completo"
+            
+            # Usar PropertyChatbot para análise
+            response = await property_chatbot.process_message(
+                user_id=user_phone,
+                message=test_message,
+                image_data=image_data
+            )
+            
+        except Exception as analyzer_error:
+            logger.error(f"PropertyChatbot test error: {str(analyzer_error)}")
+            
+            # Fallback para sistema original
+            if analysis_type == "availability":
+                response = await intelligent_bot.check_property_availability_from_image(image_data, user_phone)
+            else:
+                response = await intelligent_bot.process_image_message(image_data, "", user_phone)
         
         return {
             "image_url": image_url,
@@ -489,7 +521,9 @@ async def get_system_status():
                 "firebase_service": bool(intelligent_bot.firebase_service),
                 "ai_service": bool(intelligent_bot.ai_service.api_key),
                 "property_intelligence": bool(intelligent_bot.property_intelligence),
-                "image_analyzer": True,  # Novo componente
+                "property_image_analyzer": True,  # PropertyImageAnalyzer integrado
+                "property_chatbot": True,  # PropertyChatbot integrado
+                "image_analyzer": True,  # Componente original
             },
             "environment": {
                 "verify_token_set": bool(VERIFY_TOKEN),
