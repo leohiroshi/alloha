@@ -448,3 +448,15 @@ Quer agendar uma conversa?"""
             "last_intent": context.get("last_intent"),
             "conversation_started": context.get("created_at")
         }
+    
+    def clear_conversation_cache(self, user_phone: str = None):
+        """Limpa o cache de conversas"""
+        if user_phone:
+            # Limpar cache de usuário específico
+            if user_phone in self.conversation_context:
+                del self.conversation_context[user_phone]
+                logger.info(f"🗑️ Cache de conversa limpo para {user_phone}")
+        else:
+            # Limpar todo o cache
+            self.conversation_context.clear()
+            logger.info("🗑️ Todo o cache de conversas foi limpo")

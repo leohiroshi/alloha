@@ -292,6 +292,74 @@ class FirebaseService:
         except Exception as e:
             logger.error(f"❌ Erro ao salvar busca de imóveis: {str(e)}")
             return False
+    
+    async def clear_user_conversation(self, user_phone: str) -> bool:
+        """Limpa todas as mensagens de um usuário específico"""
+        try:
+            if not self.db:
+                logger.error("❌ Firebase não inicializado")
+                return False
+            
+            # Buscar e deletar todas as mensagens do usuário
+            messages_ref = self.db.collection('messages').where('user_phone', '==', user_phone)
+            docs = messages_ref.stream()
+            
+            deleted_count = 0
+            for doc in docs:
+                doc.reference.delete()
+                deleted_count += 1
+            
+            logger.info(f"✅ {deleted_count} mensagens removidas para {user_phone}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao limpar conversa do usuário: {str(e)}")
+            return False
+    
+    async def clear_all_conversations(self) -> bool:
+        """Limpa TODAS as conversas do Firebase"""
+        try:
+            if not self.db:
+                logger.error("❌ Firebase não inicializado")
+                return False
+            
+            # Deletar todas as mensagens
+            messages_ref = self.db.collection('messages')
+            docs = messages_ref.stream()
+            
+            deleted_count = 0
+            for doc in docs:
+                doc.reference.delete()
+                deleted_count += 1
+            
+            logger.info(f"🔥 TODAS as conversas removidas! Total: {deleted_count} mensagens")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao limpar todas as conversas: {str(e)}")
+            return False
+    
+    def list_all_users(self) -> List[str]:
+        """Lista todos os usuários que já conversaram"""
+        try:
+            if not self.db:
+                logger.error("❌ Firebase não inicializado")
+                return []
+            
+            messages_ref = self.db.collection('messages')
+            docs = messages_ref.stream()
+            
+            users = set()
+            for doc in docs:
+                data = doc.to_dict()
+                if 'user_phone' in data:
+                    users.add(data['user_phone'])
+            
+            return list(users)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao listar usuários: {str(e)}")
+            return []
 
 # Instância global
 firebase_service = FirebaseService()

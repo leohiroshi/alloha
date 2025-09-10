@@ -56,6 +56,7 @@ jobs:
             ABACUS_API_KEY="${{ secrets.ABACUS_API_KEY }}" \
             DATABASE_URL="${{ secrets.DATABASE_URL }}" \
             SECRET_KEY="${{ secrets.SECRET_KEY }}" \
+            FIREBASE_CREDENTIALS="${{ secrets.FIREBASE_CREDENTIALS }}" \
             AI_PROVIDER="abacus" \
             ENVIRONMENT="production" \
             HOST="0.0.0.0" \
