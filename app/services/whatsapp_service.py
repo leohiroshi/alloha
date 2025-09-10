@@ -100,7 +100,7 @@ class WhatsAppService:
                     "message_type": "image"
                 }
             
-            # Verificar se é documento (pode ser imagem)
+            # Verificar se é documento (pode ser imagem).
             elif message.get("type") == "document":
                 doc_info = message.get("document", {})
                 mime_type = doc_info.get("mime_type", "")
