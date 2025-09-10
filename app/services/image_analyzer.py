@@ -128,42 +128,52 @@ class PropertyImageAnalyzer:
     async def analyze_property_image(self, image_data: bytes, analysis_type: str = "complete") -> Dict[str, Any]:
         """Analisa imagem de imóvel com IA"""
         try:
-            # 1. ANÁLISE GRATUITA BÁSICA
+            # Converter para base64
+            image_base64 = base64.b64encode(image_data).decode('utf-8')
+            
+            # 1. TESTAR ABACUS VISION PRIMEIRO
+            abacus_vision_result = await self._test_abacus_vision_capability(image_base64)
+            
+            # 2. ANÁLISE GRATUITA BÁSICA
             from .free_image_analyzer import free_analyzer
             basic_analysis = await free_analyzer.analyze_property_image_free(image_data)
             
-            # 2. TENTAR APIs PAGAS (se configuradas)
+            # 3. TENTAR APIs PAGAS (se configuradas)
             advanced_analysis = None
             
+            # Abacus Vision (se suportado)
+            if abacus_vision_result.get("supports_vision"):
+                logger.info("🎉 Usando Abacus Vision para análise!")
+                advanced_analysis = abacus_vision_result
             # OpenAI Vision (se configurado)
-            if self.openai_api_key:
-                image_base64 = base64.b64encode(image_data).decode('utf-8')
+            elif self.openai_api_key:
                 advanced_analysis = await self._analyze_with_openai(image_base64, analysis_type)
-            
             # Google Vision (se configurado)
             elif self.google_vision_key:
                 advanced_analysis = await self._analyze_with_google_vision(image_data)
             
-            # 3. USAR ABACUS PARA ANÁLISE CONTEXTUAL (GRATUITO)
-            abacus_analysis = await self._analyze_with_abacus_description(basic_analysis)
+            # 4. USAR ABACUS PARA ANÁLISE CONTEXTUAL (GRATUITO)
+            abacus_text_analysis = await self._analyze_with_abacus_description(basic_analysis)
             
-            # 4. COMBINAR RESULTADOS
-            final_analysis = self._combine_free_and_ai_analysis(
+            # 5. COMBINAR RESULTADOS
+            final_analysis = self._combine_all_analysis_results(
                 basic_analysis, 
                 advanced_analysis, 
-                abacus_analysis
+                abacus_text_analysis,
+                abacus_vision_result
             )
             
             # Adicionar metadados
             final_analysis['metadata'] = {
                 'analyzed_at': datetime.now().isoformat(),
                 'analysis_type': analysis_type,
-                'methods_used': self._get_used_methods(basic_analysis, advanced_analysis, abacus_analysis),
+                'methods_used': self._get_used_methods(basic_analysis, advanced_analysis, abacus_text_analysis, abacus_vision_result),
                 'confidence_score': self._calculate_confidence(final_analysis),
-                'cost': 'Gratuito' if not advanced_analysis else 'Pago + Gratuito'
+                'cost': self._calculate_cost(advanced_analysis, abacus_vision_result),
+                'abacus_vision_available': abacus_vision_result.get("supports_vision", False)
             }
             
-            logger.info(f"Imagem analisada - Tipo: {analysis_type}, Métodos: {final_analysis['metadata']['methods_used']}")
+            logger.info(f"Imagem analisada - Métodos: {final_analysis['metadata']['methods_used']}")
             return final_analysis
             
         except Exception as e:
@@ -173,6 +183,39 @@ class PropertyImageAnalyzer:
                 'success': False,
                 'fallback_analysis': 'Análise básica indisponível',
                 'metadata': {'analyzed_at': datetime.now().isoformat()}
+            }
+    
+    async def _test_abacus_vision_capability(self, image_base64: str) -> Dict[str, Any]:
+        """Testar se Abacus suporta análise de imagem"""
+        try:
+            from .ai_service import AIService
+            ai_service = AIService()
+            
+            # Testar com uma pequena amostra da imagem para economizar
+            sample_base64 = image_base64[:1000] if len(image_base64) > 1000 else image_base64
+            
+            result = await ai_service.test_abacus_image_support(sample_base64)
+            
+            # Se funcionar, fazer análise completa
+            if result.get("supports_vision"):
+                full_analysis = await ai_service.analyze_image_with_abacus(
+                    image_base64, 
+                    "Analise esta imagem de imóvel brasileiro para um corretor"
+                )
+                
+                if full_analysis:
+                    result["analysis_content"] = full_analysis
+                    result["method"] = "Abacus Vision API"
+                    result["cost"] = "Incluído no plano Abacus"
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Erro testando Abacus vision: {str(e)}")
+            return {
+                "supports_vision": False, 
+                "error": str(e),
+                "method": "Abacus test failed"
             }
     
     async def _analyze_with_abacus_description(self, basic_analysis: Dict) -> Dict:
@@ -252,6 +295,100 @@ class PropertyImageAnalyzer:
         
         return ". ".join(description_parts) + "."
     
+    def _combine_all_analysis_results(self, basic: Dict, advanced: Optional[Dict], abacus_text: Dict, abacus_vision: Dict) -> Dict:
+        """Combinar todas as análises disponíveis"""
+        combined = {
+            'analysis_summary': 'Análise Completa Híbrida',
+            'basic_analysis': basic,
+            'abacus_text_insights': abacus_text,
+            'success': True
+        }
+        
+        # Adicionar análise avançada se disponível
+        if advanced:
+            combined['advanced_analysis'] = advanced
+            combined['analysis_summary'] = 'Análise Premium - Todas as IAs'
+        
+        # Adicionar Abacus Vision se disponível
+        if abacus_vision.get("supports_vision"):
+            combined['abacus_vision_analysis'] = abacus_vision
+            combined['analysis_summary'] = 'Análise com Abacus Vision (GRATUITO!)'
+        
+        # Criar resumo executivo
+        combined['executive_summary'] = self._create_comprehensive_executive_summary(
+            basic, advanced, abacus_text, abacus_vision
+        )
+        
+        return combined
+    
+    def _create_comprehensive_executive_summary(self, basic: Dict, advanced: Optional[Dict], abacus_text: Dict, abacus_vision: Dict) -> Dict:
+        """Criar resumo executivo completo"""
+        summary = {
+            'quality_assessment': 'Não avaliada',
+            'property_type_suggestion': 'Não identificado',
+            'marketing_readiness': 'Não avaliada',
+            'ai_confidence': 'Baixa',
+            'recommendations': [],
+            'best_analysis_source': 'Análise Básica'
+        }
+        
+        # Priorizar Abacus Vision se disponível
+        if abacus_vision.get("supports_vision") and abacus_vision.get("analysis_content"):
+            summary['ai_insights'] = abacus_vision['analysis_content'][:300] + "..."
+            summary['best_analysis_source'] = 'Abacus Vision (Gratuito)'
+            summary['ai_confidence'] = 'Alta'
+            summary['recommendations'].append("✅ Análise de IA avançada disponível gratuitamente!")
+        
+        # Análise avançada paga
+        elif advanced:
+            summary['best_analysis_source'] = 'IA Avançada (Paga)'
+            summary['ai_confidence'] = 'Muito Alta'
+        
+        # Da análise básica
+        if 'qualidade_estimada' in basic:
+            summary['quality_assessment'] = basic['qualidade_estimada'].get('classificacao', 'Não avaliada')
+        
+        if 'sugestoes_imovel' in basic:
+            suggestions = basic['sugestoes_imovel'].get('sugestoes', [])
+            if suggestions:
+                summary['property_type_suggestion'] = suggestions[0]
+        
+        if 'recomendacoes' in basic:
+            summary['recommendations'].extend(basic['recomendacoes'][:3])  # Primeiras 3
+        
+        # Do Abacus texto
+        if abacus_text.get('success') and 'abacus_analysis' in abacus_text:
+            summary['abacus_text_insights'] = abacus_text['abacus_analysis'][:200] + "..."
+        
+        return summary
+    
+    def _calculate_cost(self, advanced_analysis: Optional[Dict], abacus_vision: Dict) -> str:
+        """Calcular custo da análise"""
+        if abacus_vision.get("supports_vision"):
+            return "Gratuito (Abacus Vision incluído no plano)"
+        elif advanced_analysis:
+            return "Pago (OpenAI/Google Vision)"
+        else:
+            return "Totalmente Gratuito"
+    
+    def _get_used_methods(self, basic: Dict, advanced: Optional[Dict], abacus_text: Dict, abacus_vision: Dict) -> list:
+        """Listar métodos de análise utilizados"""
+        methods = ['Análise Básica Gratuita']
+        
+        if abacus_vision.get("supports_vision"):
+            methods.append('Abacus Vision API (Gratuito!)')
+        
+        if abacus_text.get('success'):
+            methods.append('Abacus Text Analysis')
+        
+        if advanced:
+            if 'openai' in str(advanced).lower():
+                methods.append('OpenAI Vision (Pago)')
+            elif 'google' in str(advanced).lower():
+                methods.append('Google Vision (Pago)')
+        
+        return methods
+
     def _combine_free_and_ai_analysis(self, basic: Dict, advanced: Optional[Dict], abacus: Dict) -> Dict:
         """Combinar análises gratuitas e pagas"""
         combined = {

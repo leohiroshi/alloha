@@ -363,6 +363,124 @@ Como posso ajudá-lo hoje?"""
         else:
             return "🤖 Olá! Sou especialista em imóveis. Como posso ajudá-lo hoje?"
 
+    async def test_abacus_image_support(self, image_base64: str) -> Dict[str, Any]:
+        """Testar se Abacus suporta análise de imagem"""
+        if not self.api_key:
+            return {"error": "API key não configurada", "supports_vision": False}
+        
+        try:
+            # Teste 1: Formato OpenAI Vision
+            payload_vision = {
+                "model": "gpt-4-vision-preview",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Analise esta imagem de imóvel"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                            }
+                        ]
+                    }
+                ],
+                "max_tokens": 150
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self.headers,
+                    json=payload_vision,
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as response:
+                    
+                    result = {
+                        "status": response.status,
+                        "supports_vision": response.status == 200,
+                        "endpoint_tested": "/chat/completions with vision"
+                    }
+                    
+                    if response.status == 200:
+                        data = await response.json()
+                        result["success"] = True
+                        result["response"] = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        logger.info("✅ Abacus suporta análise de imagem!")
+                    else:
+                        error_text = await response.text()
+                        result["error"] = error_text
+                        logger.info(f"❌ Abacus não suporta visão: {response.status}")
+                    
+                    return result
+                    
+        except Exception as e:
+            logger.error(f"Erro testando Abacus vision: {str(e)}")
+            return {
+                "error": str(e),
+                "supports_vision": False,
+                "test_failed": True
+            }
+
+    async def analyze_image_with_abacus(self, image_base64: str, prompt: str = "") -> Optional[str]:
+        """Analisar imagem usando Abacus AI (se suportado)"""
+        if not self.api_key:
+            return None
+            
+        try:
+            # Prompt padrão se não fornecido
+            if not prompt:
+                prompt = """Analise esta imagem de imóvel brasileiro e forneça:
+                1. Tipo de imóvel (casa, apartamento, etc.)
+                2. Características visíveis
+                3. Estado de conservação
+                4. Qualidade para marketing imobiliário
+                
+                Seja específico e útil para corretores."""
+            
+            # Tentar formato vision
+            payload = {
+                "model": "gpt-4-vision-preview",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{image_base64}",
+                                    "detail": "low"  # Para economizar tokens
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "max_tokens": 300,
+                "temperature": 0.1
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self.headers,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=20)
+                ) as response:
+                    
+                    if response.status == 200:
+                        data = await response.json()
+                        content = data["choices"][0]["message"]["content"]
+                        logger.info("✅ Análise de imagem com Abacus realizada!")
+                        return content
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"Abacus vision failed: {response.status} - {error_text}")
+                        return None
+                        
+        except Exception as e:
+            logger.error(f"Erro na análise de imagem com Abacus: {str(e)}")
+            return None
+
     async def _call_abacus_api(self, system_prompt: str, user_prompt: str) -> Optional[str]:
         """Chamar API do Abacus AI"""
         try:
