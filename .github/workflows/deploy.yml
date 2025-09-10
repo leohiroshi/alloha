@@ -45,22 +45,29 @@ jobs:
 
     - name: 🚀 Deploy to Container Apps
       run: |
+        # Configurar Firebase credentials como secret
+        az containerapp secret set \
+          --name alloha-backend \
+          --resource-group rg-alloha-prod \
+          --secrets firebase-credentials='${{ secrets.FIREBASE_CREDENTIALS }}'
+        
+        # Atualizar container app com nova imagem e variáveis
         az containerapp update \
           --name alloha-backend \
           --resource-group rg-alloha-prod \
           --image ${{ env.IMAGE_NAME }}:latest \
           --set-env-vars \
-            WHATSAPP_WEBHOOK_VERIFY_TOKEN="${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}" \
-            WHATSAPP_ACCESS_TOKEN="${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
-            WHATSAPP_PHONE_NUMBER_ID="${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}" \
-            ABACUS_API_KEY="${{ secrets.ABACUS_API_KEY }}" \
-            DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            SECRET_KEY="${{ secrets.SECRET_KEY }}" \
-            FIREBASE_CREDENTIALS="${{ secrets.FIREBASE_CREDENTIALS }}" \
-            AI_PROVIDER="abacus" \
-            ENVIRONMENT="production" \
-            HOST="0.0.0.0" \
-            PORT="8000"
+            "WHATSAPP_WEBHOOK_VERIFY_TOKEN=${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}" \
+            "WHATSAPP_ACCESS_TOKEN=${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
+            "WHATSAPP_PHONE_NUMBER_ID=${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}" \
+            "ABACUS_API_KEY=${{ secrets.ABACUS_API_KEY }}" \
+            "DATABASE_URL=${{ secrets.DATABASE_URL }}" \
+            "SECRET_KEY=${{ secrets.SECRET_KEY }}" \
+            "FIREBASE_CREDENTIALS=secretref:firebase-credentials" \
+            "AI_PROVIDER=abacus" \
+            "ENVIRONMENT=production" \
+            "HOST=0.0.0.0" \
+            "PORT=8000"
 
     - name: ✅ Deployment Status
       run: |
