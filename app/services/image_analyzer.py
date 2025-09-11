@@ -8,13 +8,36 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 import json
-
-# Importar seu analisador de imagens
+from abacusai import ApiClient
 from property_image_analyzer import property_image_analyzer
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class PropertyImageAnalyzer:
+    def __init__(self, deployment_token: str, deployment_id: str):
+        self.client = ApiClient()
+        self.deployment_token = deployment_token
+        self.deployment_id = deployment_id
+
+    async def analyze_property_image(self, image_bytes: bytes, analysis_type: str = "complete") -> dict:
+        # Converte a imagem para base64
+        import base64
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        # Chama o endpoint de descrição de imagem do Abacus
+        result = self.client.describe_image(
+            deployment_token=self.deployment_token,
+            deployment_id=self.deployment_id,
+            image_base64=image_b64
+        )
+        return result
+
+# Exemplo de instância global
+property_image_analyzer = PropertyImageAnalyzer(
+    deployment_token="0c3a137697cb4bc8aee4415dd291fa1b",
+    deployment_id="e0a6b28e0"
+)
 
 class PropertyChatbot:
     """Chatbot especializado em análise de imóveis"""
