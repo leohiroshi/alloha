@@ -9,9 +9,6 @@ from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
-# Importar o PropertyImageAnalyzer
-from app.services.property_image_analyzer import property_image_analyzer
-from app.services.chatbot_imoveis import property_chatbot
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
