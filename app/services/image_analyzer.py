@@ -9,7 +9,6 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import json
 from abacusai import ApiClient
-from property_image_analyzer import property_image_analyzer
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
