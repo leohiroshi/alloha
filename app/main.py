@@ -518,16 +518,13 @@ async def get_system_status():
                 "firebase_service": bool(intelligent_bot.firebase_service),
                 "ai_service": bool(intelligent_bot.ai_service.api_key),
                 "property_intelligence": bool(intelligent_bot.property_intelligence),
-                "property_image_analyzer": True,  # PropertyImageAnalyzer integrado
                 "property_chatbot": True,  # PropertyChatbot integrado
                 "image_analyzer": True,  # Componente original
             },
             "environment": {
                 "verify_token_set": bool(VERIFY_TOKEN),
                 "access_token_set": bool(ACCESS_TOKEN),
-                "phone_number_set": bool(PHONE_NUMBER_ID),
-                "openai_api_key_set": bool(os.getenv("OPENAI_API_KEY")),
-                "google_vision_api_key_set": bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+                "phone_number_set": bool(PHONE_NUMBER_ID)
             },
             "status": "success"
         }
