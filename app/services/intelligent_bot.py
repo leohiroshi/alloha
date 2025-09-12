@@ -27,6 +27,7 @@ class IntelligentRealEstateBot:
     """Bot inteligente especializado em imóveis com análise de imagens"""
     
     def __init__(self):
+        self.property_intelligence = PropertyIntelligenceService()
         self.firebase_service = firebase_service 
         self.image_analyzer = PropertyImageAnalyzer(
             deployment_token="0c3a137697cb4bc8aee4415dd291fa1b",
