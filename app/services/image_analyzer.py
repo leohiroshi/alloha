@@ -13,6 +13,12 @@ from abacusai import ApiClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Exemplo de instância global
+property_image_analyzer = PropertyImageAnalyzer(
+    deployment_token="0c3a137697cb4bc8aee4415dd291fa1b",
+    deployment_id="e0a6b28e0"
+)
+
 class PropertyImageAnalyzer:
     def __init__(self, deployment_token: str, deployment_id: str):
         self.client = ApiClient()
@@ -30,12 +36,6 @@ class PropertyImageAnalyzer:
             image_base64=image_b64
         )
         return result
-
-# Exemplo de instância global
-property_image_analyzer = PropertyImageAnalyzer(
-    deployment_token="0c3a137697cb4bc8aee4415dd291fa1b",
-    deployment_id="e0a6b28e0"
-)
 
 class PropertyChatbot:
     """Chatbot especializado em análise de imóveis"""
