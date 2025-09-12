@@ -8,25 +8,25 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
-from abacusai import ApiClient
-import os, base64, aiohttp
+import os
+import base64
+import aiohttp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PropertyImageAnalyzer:
     def __init__(self, deployment_token: str, deployment_id: str):
-        self.client = ApiClient()
         self.deployment_token = deployment_token
         self.deployment_id = deployment_id
-
-    logger = logging.getLogger(__name__)
-    ABACUS_API_KEY = os.getenv("ABACUS_API_KEY", "")
+        self.abacus_api_key = os.getenv("ABACUS_API_KEY", "")
+        
+        if not self.abacus_api_key:
+            logger.warning("ABACUS_API_KEY não configurado - análise de imagem não funcionará")
 
     async def abacus_describe_image(
+        self,
         image_bytes: bytes,
-        deployment_token: str,
-        deployment_id: str,
         prompt: Optional[str] = None,
         categories: Optional[List[str]] = None,
         total_timeout_sec: int = 30,
@@ -36,12 +36,10 @@ class PropertyImageAnalyzer:
         Chama o endpoint /describeImage do Abacus com robustez:
         - Validação de env e payload
         - Timeouts
-        - Retries com backoff exponencial simples
+        - Retries com backoff exponencial
         - Logs úteis (sem vazar segredos)
-
-        Retorna o JSON de resposta (dict). Lança exceção se não conseguir após as tentativas.
         """
-        if not PropertyImageAnalyzer.ABACUS_API_KEY:
+        if not self.abacus_api_key:
             raise RuntimeError("ABACUS_API_KEY não configurado")
         if not image_bytes:
             raise ValueError("image_bytes vazio")
@@ -49,8 +47,8 @@ class PropertyImageAnalyzer:
         url = "https://apps.abacus.ai/api/v0/describeImage"
         img_b64 = base64.b64encode(image_bytes).decode("utf-8")
         payload: Dict[str, Any] = {
-            "deploymentToken": deployment_token,
-            "deploymentId": deployment_id,
+            "deploymentToken": self.deployment_token,
+            "deploymentId": self.deployment_id,
             "imageBase64": img_b64,
         }
         if prompt:
@@ -59,7 +57,7 @@ class PropertyImageAnalyzer:
             payload["categories"] = categories
 
         headers = {
-            "Authorization": f"Bearer {PropertyImageAnalyzer.ABACUS_API_KEY}",
+            "Authorization": f"Bearer {self.abacus_api_key}",
             "Content-Type": "application/json",
         }
 
@@ -100,7 +98,6 @@ class PropertyImageAnalyzer:
     async def analyze_property_image(self, image_bytes: bytes, analysis_type: str = "complete") -> dict:
         """
         Analisa a imagem de imóvel usando o deployment configurado, com retries/robustez.
-        Mantém compatibilidade com o parâmetro analysis_type via categories.
         """
         try:
             logger.info(f"Analisando imagem ({len(image_bytes)} bytes), tipo: {analysis_type}")
@@ -115,8 +112,6 @@ class PropertyImageAnalyzer:
 
             result = await self.abacus_describe_image(
                 image_bytes=image_bytes,
-                deployment_token=self.deployment_token,
-                deployment_id=self.deployment_id,
                 prompt=prompt,
                 categories=categories,
             )
@@ -129,15 +124,50 @@ class PropertyImageAnalyzer:
             return {"success": False, "error": str(e)}
 
     async def check_property_availability_by_image(self, image_bytes: bytes) -> dict:
-        # Exemplo: chama o mesmo método de análise, mas retorna apenas disponibilidade
+        """Verifica disponibilidade específica do imóvel"""
         analysis = await self.analyze_property_image(image_bytes, analysis_type="availability")
         return {
             "is_available": analysis.get("availability_status") == "disponível",
             "confidence": analysis.get("confidence", 0),
-            "reasoning": analysis.get("reasoning", "")
+            "reasoning": analysis.get("reasoning", "Análise não disponível"),
+            "recommendation": "Entre em contato para confirmar disponibilidade"
         }
 
-# Exemplo de instância global
+    def format_analysis_response(self, analysis_result: Dict, user_message: str) -> str:
+        """Formata a resposta da análise para o usuário"""
+        if not analysis_result.get("success", True):
+            return """
+😅 *Tive dificuldade para analisar esta imagem.*
+
+📸 *Dicas para melhores resultados:*
+• Use fotos claras e bem iluminadas
+• Evite imagens muito distantes
+• Certifique-se que placas/textos estão visíveis
+
+📞 *Ou fale direto com nossos especialistas:*
+🏠 Vendas: (41) 99214-6670
+🏡 Locação: (41) 99223-0874
+            """
+
+        # Resposta padrão formatada
+        response = "🏠 *Análise do Imóvel Concluída*\n\n"
+        
+        # Adicionar informações básicas se disponíveis
+        if analysis_result.get("property_type"):
+            response += f"🏡 *Tipo:* {analysis_result['property_type']}\n"
+        
+        if analysis_result.get("description"):
+            description = analysis_result["description"][:200]
+            response += f"📝 *Descrição:* {description}...\n"
+        
+        response += "\n💡 *Análise detalhada realizada com sucesso!*\n"
+        response += "\n📞 *Quer mais informações? Entre em contato:*\n"
+        response += "🏠 Vendas: (41) 99214-6670\n"
+        response += "🏡 Locação: (41) 99223-0874"
+        
+        return response
+
+# Instância global
 property_image_analyzer = PropertyImageAnalyzer(
     deployment_token="0c3a137697cb4bc8aee4415dd291fa1b",
     deployment_id="e0a6b28e0"
@@ -259,7 +289,7 @@ Envie uma foto do imóvel que você quer analisar e eu te ajudo com:
             
             # Formatar resposta baseada no tipo de análise
             if analysis_type == "availability":
-                return await self._format_availability_response(analysis_result)
+                return await self._format_availability_response(analysis_result, image_data)
             elif analysis_type == "contact":
                 return await self._format_contact_response(analysis_result)
             else:
@@ -280,14 +310,14 @@ Envie uma foto do imóvel que você quer analisar e eu te ajudo com:
         else:
             return "complete"
     
-    async def _format_availability_response(self, analysis: Dict) -> str:
+    async def _format_availability_response(self, analysis: Dict, image_data: bytes) -> str:
         """Formata resposta específica para disponibilidade"""
         try:
-            if not analysis.get('success'):
+            if not analysis.get('success', True):
                 return "😅 Não consegui determinar a disponibilidade desta imagem. Tente com uma foto mais clara!"
             
             # Usar o método específico do analyzer
-            availability_check = await self.analyzer.check_property_availability_by_image(b'')  # Já foi analisada
+            availability_check = await self.analyzer.check_property_availability_by_image(image_data)
             
             response = "🔍 *Verificação de Disponibilidade*\n\n"
             
@@ -473,7 +503,6 @@ Tente novamente ou entre em contato diretamente:
             'images_analyzed': sum(1 for msg in history if msg.get('has_image')),
             'last_interaction': history[-1]['timestamp'] if history else None
         }
-
 
 # Instância global do chatbot
 property_chatbot = PropertyChatbot()
