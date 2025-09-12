@@ -13,18 +13,14 @@ from .firebase_service import FirebaseService
 from .property_intelligence import PropertyIntelligenceService
 from .image_analyzer import PropertyImageAnalyzer
 
-# Configuração de logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 class IntelligentRealEstateBot:
     """Bot inteligente especializado em imóveis com análise de imagens"""
     
     def __init__(self):
-        self.ai_service = AIService()
-        self.firebase_service = FirebaseService()
-        self.property_intelligence = PropertyIntelligenceService()
-        self.image_analyzer = PropertyImageAnalyzer()
+        self.image_analyzer = PropertyImageAnalyzer(
+            deployment_token="0c3a137697cb4bc8aee4415dd291fa1b",
+            deployment_id="e0a6b28e0"
+        )
         
         # Configurações do bot
         self.bot_config = {
