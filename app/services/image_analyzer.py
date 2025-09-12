@@ -5,10 +5,11 @@ Integra o PropertyImageAnalyzer com interface de chat
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
 from abacusai import ApiClient
+import os, base64, aiohttp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,21 +20,112 @@ class PropertyImageAnalyzer:
         self.deployment_token = deployment_token
         self.deployment_id = deployment_id
 
+    logger = logging.getLogger(__name__)
+    ABACUS_API_KEY = os.getenv("ABACUS_API_KEY", "")
+
+    async def abacus_describe_image(
+        image_bytes: bytes,
+        deployment_token: str,
+        deployment_id: str,
+        prompt: Optional[str] = None,
+        categories: Optional[List[str]] = None,
+        total_timeout_sec: int = 30,
+        connect_timeout_sec: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Chama o endpoint /describeImage do Abacus com robustez:
+        - Validação de env e payload
+        - Timeouts
+        - Retries com backoff exponencial simples
+        - Logs úteis (sem vazar segredos)
+
+        Retorna o JSON de resposta (dict). Lança exceção se não conseguir após as tentativas.
+        """
+        if not PropertyImageAnalyzer.ABACUS_API_KEY:
+            raise RuntimeError("ABACUS_API_KEY não configurado")
+        if not image_bytes:
+            raise ValueError("image_bytes vazio")
+
+        url = "https://apps.abacus.ai/api/v0/describeImage"
+        img_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        payload: Dict[str, Any] = {
+            "deploymentToken": deployment_token,
+            "deploymentId": deployment_id,
+            "imageBase64": img_b64,
+        }
+        if prompt:
+            payload["prompt"] = prompt
+        if categories:
+            payload["categories"] = categories
+
+        headers = {
+            "Authorization": f"Bearer {PropertyImageAnalyzer.ABACUS_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        timeouts = aiohttp.ClientTimeout(total=total_timeout_sec, connect=connect_timeout_sec)
+        backoffs = [0.5, 1.0, 2.0]  # 3 tentativas + 1 final
+        last_err: Optional[Exception] = None
+
+        logger.info(
+            f"Abacus describeImage → bytes={len(image_bytes)}, b64_len={len(img_b64)}, "
+            f"has_prompt={bool(prompt)}, categories={categories or 'None'}"
+        )
+
+        for attempt_idx, wait in enumerate(backoffs + [None], start=1):
+            try:
+                async with aiohttp.ClientSession(timeout=timeouts) as session:
+                    async with session.post(url, json=payload, headers=headers) as resp:
+                        text = await resp.text()
+                        if resp.status == 200:
+                            try:
+                                data = await resp.json()
+                                logger.info("Abacus describeImage OK (status=200)")
+                                return data
+                            except Exception as e:
+                                logger.warning(f"Resposta 200 mas JSON inválido: {e}; body (200 chars): {text[:200]}")
+                                raise
+                        else:
+                            logger.warning(f"Abacus describeImage falhou status={resp.status}; body (300 chars): {text[:300]}")
+                            last_err = RuntimeError(f"status={resp.status} body_start={text[:120]}")
+            except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+                logger.warning(f"Tentativa {attempt_idx} falhou (rede/timeout): {e}")
+                last_err = e
+
+            if wait is not None:
+                await asyncio.sleep(wait)
+
+        raise last_err or RuntimeError("Falha ao chamar Abacus describeImage após retries")
+
     async def analyze_property_image(self, image_bytes: bytes, analysis_type: str = "complete") -> dict:
-        import base64
+        """
+        Analisa a imagem de imóvel usando o deployment configurado, com retries/robustez.
+        Mantém compatibilidade com o parâmetro analysis_type via categories.
+        """
         try:
-            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
             logger.info(f"Analisando imagem ({len(image_bytes)} bytes), tipo: {analysis_type}")
-            result = self.client.describe_image(
+
+            # Monte um prompt opcional se quiser enriquecer a análise
+            prompt = None
+            if analysis_type and analysis_type != "complete":
+                prompt = f"Faça uma análise focalizada no tipo '{analysis_type}' para esta imagem de imóvel."
+
+            # Categories no payload para manter semântica anterior
+            categories = [analysis_type] if analysis_type else None
+
+            result = await self.abacus_describe_image(
+                image_bytes=image_bytes,
                 deployment_token=self.deployment_token,
                 deployment_id=self.deployment_id,
-                image=image_b64,
-                categories=[analysis_type]
+                prompt=prompt,
+                categories=categories,
             )
-            logger.info(f"Resultado da análise: {result}")
+
+            logger.info(f"Resultado da análise recebido com sucesso (chaves: {list(result.keys())[:6]})")
             return result
+
         except Exception as e:
-            logger.error(f"Erro ao analisar imagem: {str(e)}")
+            logger.error(f"Erro ao analisar imagem: {e}")
             return {"success": False, "error": str(e)}
 
     async def check_property_availability_by_image(self, image_bytes: bytes) -> dict:
