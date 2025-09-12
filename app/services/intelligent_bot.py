@@ -13,6 +13,14 @@ from .firebase_service import FirebaseService
 from .property_intelligence import PropertyIntelligenceService
 from .image_analyzer import PropertyImageAnalyzer
 
+logger = logging.getLogger("IntelligentRealEstateBot")
+logger.setLevel(logging.INFO)
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
 class IntelligentRealEstateBot:
     """Bot inteligente especializado em imóveis com análise de imagens"""
     
