@@ -21,14 +21,20 @@ class PropertyImageAnalyzer:
 
     async def analyze_property_image(self, image_bytes: bytes, analysis_type: str = "complete") -> dict:
         import base64
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        result = self.client.describe_image(
-            deployment_token=self.deployment_token,
-            deployment_id=self.deployment_id,
-            image=image_b64,
-            categories=[analysis_type]
-        )
-        return result
+        try:
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+            logger.info(f"Analisando imagem ({len(image_bytes)} bytes), tipo: {analysis_type}")
+            result = self.client.describe_image(
+                deployment_token=self.deployment_token,
+                deployment_id=self.deployment_id,
+                image=image_b64,
+                categories=[analysis_type]
+            )
+            logger.info(f"Resultado da análise: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"Erro ao analisar imagem: {str(e)}")
+            return {"success": False, "error": str(e)}
 
     async def check_property_availability_by_image(self, image_bytes: bytes) -> dict:
         # Exemplo: chama o mesmo método de análise, mas retorna apenas disponibilidade

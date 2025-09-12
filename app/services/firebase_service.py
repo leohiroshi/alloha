@@ -93,7 +93,7 @@ class FirebaseService:
                 "total_messages": firestore.Increment(1)
             }, merge=True)
             
-            logger.info(f"💾 Mensagem salva: {user_phone} - {direction}")
+            logger.info(f"Mensagem salva: {user_phone} - {direction}")
             return True
             
         except Exception as e:

@@ -113,7 +113,7 @@ class IntelligentRealEstateBot:
     async def process_image_message(self, image_data: bytes, caption: str, user_phone: str) -> str:
         """Processa imagem enviada pelo usuário"""
         try:
-            logger.info(f"📸 Imagem recebida de {user_phone} - Tamanho: {len(image_data)} bytes")
+            logger.info(f"Imagem recebida de {user_phone} - Tamanho: {len(image_data)} bytes")
             
             # Salvar informação da imagem no Firebase
             await self.firebase_service.save_message(
