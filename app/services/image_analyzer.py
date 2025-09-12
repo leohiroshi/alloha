@@ -25,7 +25,8 @@ class PropertyImageAnalyzer:
         result = self.client.describe_image(
             deployment_token=self.deployment_token,
             deployment_id=self.deployment_id,
-            image=image_b64
+            image=image_b64,
+            categories=[analysis_type]
         )
         return result
 
