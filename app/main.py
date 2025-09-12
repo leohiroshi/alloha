@@ -9,8 +9,6 @@ from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
-from app.services.property_chatbot import PropertyChatbot
-
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -31,8 +29,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-property_chatbot = PropertyChatbot()
 
 # Variáveis de ambiente
 VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "alloha_secret")
@@ -314,10 +310,10 @@ async def process_image_message(message: Dict, from_number: str, webhook_data: D
         # NOVA INTEGRAÇÃO: Usar PropertyChatbot para análise de imagens
         try:
             # Usar o chatbot integrado com PropertyImageAnalyzer
-            response = await property_chatbot.process_message(
-                user_id=from_number,
-                message=caption or "Analisar imóvel",
-                image_data=image_data
+            response = await intelligent_bot.process_image_message(
+                image_data=image_data,
+                caption=caption,
+                user_phone=from_number
             )
             
             logger.info(f"✅ PropertyChatbot analysis completed for {from_number}")
@@ -415,7 +411,7 @@ async def test_image_analysis(request: Request):
         image_url = body.get("image_url", "")
         user_phone = body.get("user_phone", "test_user")
         analysis_type = body.get("analysis_type", "complete")  # complete ou availability
-        
+        caption = body.get("caption", "") 
         if not image_url:
             raise HTTPException(status_code=400, detail="Image URL is required")
         
@@ -434,10 +430,10 @@ async def test_image_analysis(request: Request):
             test_message = "verificar disponibilidade" if analysis_type == "availability" else "analisar imóvel completo"
             
             # Usar PropertyChatbot para análise
-            response = await property_chatbot.process_message(
-                user_id=user_phone,
-                message=test_message,
-                image_data=image_data
+            response = await intelligent_bot.process_image_message(
+                image_data=image_data,
+                caption=caption,
+                user_phone=user_phone
             )
             
         except Exception as analyzer_error:
@@ -522,7 +518,7 @@ async def get_system_status():
                 "firebase_service": bool(intelligent_bot.firebase_service),
                 "ai_service": bool(intelligent_bot.ai_service.api_key),
                 "property_intelligence": bool(intelligent_bot.property_intelligence),
-                "property_chatbot": True,  # PropertyChatbot integrado
+                "intelligent_bot": True,  # PropertyChatbot integrado
                 "image_analyzer": True,  # Componente original
             },
             "environment": {
