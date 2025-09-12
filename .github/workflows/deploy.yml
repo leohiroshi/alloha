@@ -78,8 +78,7 @@ jobs:
               "ENVIRONMENT=production" \
               "HOST=0.0.0.0" \
               "PORT=8000"
-
-          # Opcional: assegurar modo single (sempre última revisão)
+              
           az containerapp revision set-mode \
             --name alloha-backend \
             --resource-group rg-alloha-prod \
