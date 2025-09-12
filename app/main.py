@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
+from app.services.property_chatbot import PropertyChatbot
+
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +31,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+property_chatbot = PropertyChatbot()
 
 # Variáveis de ambiente
 VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "alloha_secret")

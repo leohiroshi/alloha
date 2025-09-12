@@ -12,6 +12,8 @@ from .ai_service import AIService
 from .firebase_service import FirebaseService
 from .property_intelligence import PropertyIntelligenceService
 from .image_analyzer import PropertyImageAnalyzer
+from app.services.firebase_service import firebase_service
+
 
 logger = logging.getLogger("IntelligentRealEstateBot")
 logger.setLevel(logging.INFO)

@@ -29,6 +29,15 @@ class PropertyImageAnalyzer:
         )
         return result
 
+    async def check_property_availability_by_image(self, image_bytes: bytes) -> dict:
+        # Exemplo: chama o mesmo método de análise, mas retorna apenas disponibilidade
+        analysis = await self.analyze_property_image(image_bytes, analysis_type="availability")
+        return {
+            "is_available": analysis.get("availability_status") == "disponível",
+            "confidence": analysis.get("confidence", 0),
+            "reasoning": analysis.get("reasoning", "")
+        }
+
 # Exemplo de instância global
 property_image_analyzer = PropertyImageAnalyzer(
     deployment_token="0c3a137697cb4bc8aee4415dd291fa1b",
