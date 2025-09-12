@@ -123,7 +123,7 @@ class IntelligentRealEstateBot:
             
             # Analisar imagem
             analysis_result = await self.image_analyzer.analyze_property_image(
-                image_data=image_data,
+                image_bytes=image_data,
                 analysis_type="complete"
             )
             
