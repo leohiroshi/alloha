@@ -56,87 +56,97 @@ class PropertyImageAnalyzer:
             return False
 
     async def abacus_describe_image(
-        self,
-        image_bytes: bytes,
-        prompt: Optional[str] = None,
-        categories: Optional[List[str]] = None,
-        total_timeout_sec: int = 45,
-        connect_timeout_sec: int = 15,
-    ) -> Dict[str, Any]:
+            self,
+            image_bytes: bytes,
+            prompt: Optional[str] = None,          # não é usado por describeImage, mantido por compatibilidade
+            categories: Optional[List[str]] = None, # describeImage REQUER categories
+            total_timeout_sec: int = 45,
+            connect_timeout_sec: int = 15,
+        ) -> Dict[str, Any]:
         """
-        Chama o endpoint /describeImage do Abacus com robustez melhorada
+        Chama o endpoint /describeImage do Abacus de forma robusta (multipart/form-data + apiKey header).
+        Documentação: https://abacus.ai/help/ref/predict/describeImage
         """
         if not self.abacus_api_key:
             raise RuntimeError("ABACUS_API_KEY não configurado")
         if not image_bytes:
             raise ValueError("image_bytes vazio")
+        if not self.deployment_token or not self.deployment_id:
+            raise RuntimeError("deployment_token/deployment_id não configurados")
+        if not categories:
+            # describeImage exige uma lista de categorias. Ajuste conforme seu caso.
+            categories = ["complete"]
 
-        # Teste de conectividade primeiro
-        logger.info("Testando conectividade antes da chamada...")
-        connectivity_ok = await self.test_dns_connectivity()
+        # Teste de conectividade primeiro (mude o host para o domínio correto)
+        logger.info("Testando conectividade antes da chamada (api.abacus.ai)...")
+        connectivity_ok = await self.test_dns_connectivity(host="api.abacus.ai")
         if not connectivity_ok:
-            raise RuntimeError("Falha na conectividade com Abacus - DNS ou rede indisponível")
+            raise RuntimeError("Falha na conectividade com Abacus (api.abacus.ai) - DNS ou rede indisponível")
 
-        url = "https://apps.abacus.ai/api/v0/describeImage"
-        img_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        payload: Dict[str, Any] = {
-            "deploymentToken": self.deployment_token,
-            "deploymentId": self.deployment_id,
-            "imageBase64": img_b64,
-        }
-        if prompt:
-            payload["prompt"] = prompt
-        if categories:
-            payload["categories"] = categories
+        url = "https://api.abacus.ai/api/v0/describeImage"  # domínio correto conforme docs
+        # Importante: este endpoint espera 'image' como bytes via multipart/form-data.
+        # Não envie JSON com imageBase64 aqui.
 
         headers = {
-            "Authorization": f"Bearer {self.abacus_api_key}",
-            "Content-Type": "application/json",
+            "apiKey": self.abacus_api_key,     # conforme documentação de API privada
+            "Accept": "application/json",
             "User-Agent": "AllegaBot/1.0",
-            "Accept": "application/json"
+            # NÃO defina Content-Type; deixe o aiohttp definir o boundary do multipart
         }
 
-        # Configurações de timeout
         timeout = aiohttp.ClientTimeout(
             total=total_timeout_sec,
             connect=connect_timeout_sec,
             sock_read=20,
-            sock_connect=connect_timeout_sec
+            sock_connect=connect_timeout_sec,
         )
 
-        backoffs = [1.0, 2.0, 4.0, 8.0]  # 4 tentativas com backoff exponencial
+        # 5 tentativas com backoff exponencial
+        backoffs = [1.0, 2.0, 4.0, 8.0, 16.0]
         last_err: Optional[Exception] = None
 
         logger.info(
-            f"Abacus describeImage → bytes={len(image_bytes)}, b64_len={len(img_b64)}, "
-            f"has_prompt={bool(prompt)}, categories={categories or 'None'}"
+            f"Abacus describeImage → bytes={len(image_bytes)}, has_prompt={bool(prompt)}, "
+            f"categories={categories}, url={url}"
         )
 
-        # CORREÇÃO: Criar connector e session por tentativa para evitar "Session is closed"
         for attempt_idx, wait in enumerate(backoffs + [None], start=1):
             connector = None
             try:
                 logger.info(f"Tentativa {attempt_idx} de chamada para Abacus...")
-                
-                # Criar connector fresh para cada tentativa
+
+                # Criar connector fresh por tentativa
                 connector = aiohttp.TCPConnector(
                     limit=10,
                     limit_per_host=5,
                     ttl_dns_cache=300,
                     use_dns_cache=True,
                     keepalive_timeout=30,
-                    enable_cleanup_closed=True
+                    enable_cleanup_closed=True,
                 )
-                
-                async with aiohttp.ClientSession(
-                    timeout=timeout, 
-                    connector=connector,
-                    headers={"User-Agent": "AllegaBot/1.0"}
-                ) as session:
-                    async with session.post(url, json=payload, headers=headers) as resp:
+
+                # Montar multipart form
+                form = aiohttp.FormData()
+                form.add_field("deploymentToken", self.deployment_token)
+                form.add_field("deploymentId", self.deployment_id)
+                # categories precisa ser string JSON
+                form.add_field("categories", json.dumps(categories))
+                # topN opcional: form.add_field("topN", "5")
+                # prompt não é um argumento deste método nas docs; ignore aqui
+
+                # Adicionar o binário
+                form.add_field(
+                    "image",
+                    image_bytes,
+                    filename="image.jpg",
+                    content_type="application/octet-stream",
+                )
+
+                async with aiohttp.ClientSession(timeout=timeout, connector=connector, headers={"User-Agent": "AllegaBot/1.0"}) as session:
+                    async with session.post(url, data=form, headers=headers) as resp:
                         text = await resp.text()
                         logger.info(f"Resposta recebida: status={resp.status}, content_length={len(text)}")
-                        
+
                         if resp.status == 200:
                             try:
                                 data = await resp.json()
@@ -145,18 +155,18 @@ class PropertyImageAnalyzer:
                             except Exception as e:
                                 logger.warning(f"Resposta 200 mas JSON inválido: {e}; body (200 chars): {text[:200]}")
                                 raise
-                        elif resp.status in (429, 500, 502, 503, 504):
-                            # Códigos retentáveis
+
+                        # Códigos retentáveis (inclui arestas de CDN)
+                        if resp.status in (429, 500, 502, 503, 504, 522, 523, 524):
                             logger.warning(f"Serviço temporariamente indisponível ({resp.status}): {text[:300]}")
                             last_err = RuntimeError(f"Serviço Abacus indisponível ({resp.status}): {text[:120]}")
-                        elif resp.status == 401:
-                            logger.error(f"Token inválido (401): {text[:300]}")
-                            raise RuntimeError(f"Token de acesso inválido")
+                        elif resp.status in (401, 403):
+                            logger.error(f"Auth falhou ({resp.status}): {text[:300]}")
+                            raise RuntimeError("Falha de autenticação com Abacus (verifique apiKey/deploymentToken)")
                         else:
-                            # Outros códigos não-retentáveis
                             logger.error(f"Abacus describeImage falhou status={resp.status}; body (300 chars): {text[:300]}")
                             raise RuntimeError(f"Erro não-retentável: status={resp.status} body_start={text[:120]}")
-                            
+
             except (aiohttp.ClientConnectorError, asyncio.TimeoutError, aiohttp.ServerDisconnectedError) as e:
                 logger.warning(f"Tentativa {attempt_idx} falhou (rede/timeout): {type(e).__name__}: {e}")
                 last_err = e
@@ -164,16 +174,13 @@ class PropertyImageAnalyzer:
                 logger.error(f"Tentativa {attempt_idx} falhou (erro inesperado): {type(e).__name__}: {e}")
                 last_err = e
             finally:
-                # Fechar connector desta tentativa
                 if connector:
                     await connector.close()
 
-            # Se chegou aqui, a tentativa falhou - aguardar antes da próxima
             if wait is not None:
                 logger.info(f"Aguardando {wait}s antes da próxima tentativa...")
                 await asyncio.sleep(wait)
 
-        # Se chegou aqui, todas as tentativas falharam
         raise RuntimeError(f"Erro ao analisar imagem após {len(backoffs)} tentativas: {last_err}")
     
     async def analyze_property_image(self, image_bytes: bytes, analysis_type: str = "complete") -> dict:
