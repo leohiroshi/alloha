@@ -79,7 +79,7 @@ class PropertyImageAnalyzer:
 
         # Teste de conectividade primeiro (mude o host para o domínio correto)
         logger.info("Testando conectividade antes da chamada (api.abacus.ai)...")
-        connectivity_ok = await self.test_dns_connectivity(host="api.abacus.ai")
+        connectivity_ok = await self.test_dns_connectivity()
         if not connectivity_ok:
             raise RuntimeError("Falha na conectividade com Abacus (api.abacus.ai) - DNS ou rede indisponível")
 
