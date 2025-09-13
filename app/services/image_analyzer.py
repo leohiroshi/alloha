@@ -11,6 +11,7 @@ import json
 import os
 import base64
 import aiohttp
+import socket
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,26 +24,58 @@ class PropertyImageAnalyzer:
         
         if not self.abacus_api_key:
             logger.warning("ABACUS_API_KEY não configurado - análise de imagem não funcionará")
+        else:
+            logger.info(f"ABACUS_API_KEY configurado: {self.abacus_api_key[:10]}...")
+
+    async def test_dns_connectivity(self) -> bool:
+        """Testa conectividade DNS e rede com Abacus"""
+        try:
+            # Teste DNS
+            host = "apps.abacus.ai"
+            logger.info(f"Testando DNS para {host}...")
+            
+            # Resolver DNS
+            try:
+                ip = socket.gethostbyname(host)
+                logger.info(f"DNS OK: {host} -> {ip}")
+            except socket.gaierror as e:
+                logger.error(f"DNS FALHOU: {host} -> {e}")
+                return False
+            
+            # Teste HTTP básico
+            url = f"https://{host}"
+            timeout = aiohttp.ClientTimeout(total=10, connect=5)
+            
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as resp:
+                    logger.info(f"HTTP conectividade OK: status={resp.status}")
+                    return True
+                    
+        except Exception as e:
+            logger.error(f"Teste de conectividade falhou: {e}")
+            return False
 
     async def abacus_describe_image(
         self,
         image_bytes: bytes,
         prompt: Optional[str] = None,
         categories: Optional[List[str]] = None,
-        total_timeout_sec: int = 30,
-        connect_timeout_sec: int = 10,
+        total_timeout_sec: int = 45,
+        connect_timeout_sec: int = 15,
     ) -> Dict[str, Any]:
         """
-        Chama o endpoint /describeImage do Abacus com robustez:
-        - Validação de env e payload
-        - Timeouts
-        - Retries com backoff exponencial
-        - Logs úteis (sem vazar segredos)
+        Chama o endpoint /describeImage do Abacus com robustez melhorada
         """
         if not self.abacus_api_key:
             raise RuntimeError("ABACUS_API_KEY não configurado")
         if not image_bytes:
             raise ValueError("image_bytes vazio")
+
+        # Teste de conectividade primeiro
+        logger.info("Testando conectividade antes da chamada...")
+        connectivity_ok = await self.test_dns_connectivity()
+        if not connectivity_ok:
+            raise RuntimeError("Falha na conectividade com Abacus - DNS ou rede indisponível")
 
         url = "https://apps.abacus.ai/api/v0/describeImage"
         img_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -59,10 +92,28 @@ class PropertyImageAnalyzer:
         headers = {
             "Authorization": f"Bearer {self.abacus_api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "AllegaBot/1.0",
+            "Accept": "application/json"
         }
 
-        timeouts = aiohttp.ClientTimeout(total=total_timeout_sec, connect=connect_timeout_sec)
-        backoffs = [0.5, 1.0, 2.0]  # 3 tentativas + 1 final
+        # Configurações de timeout mais robustas
+        connector = aiohttp.TCPConnector(
+            limit=10,
+            limit_per_host=5,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+            keepalive_timeout=30,
+            enable_cleanup_closed=True
+        )
+        
+        timeout = aiohttp.ClientTimeout(
+            total=total_timeout_sec,
+            connect=connect_timeout_sec,
+            sock_read=20,
+            sock_connect=connect_timeout_sec
+        )
+
+        backoffs = [1.0, 2.0, 4.0]  # 3 tentativas com backoff
         last_err: Optional[Exception] = None
 
         logger.info(
@@ -72,28 +123,50 @@ class PropertyImageAnalyzer:
 
         for attempt_idx, wait in enumerate(backoffs + [None], start=1):
             try:
-                async with aiohttp.ClientSession(timeout=timeouts) as session:
+                logger.info(f"Tentativa {attempt_idx} de chamada para Abacus...")
+                
+                async with aiohttp.ClientSession(
+                    timeout=timeout, 
+                    connector=connector,
+                    headers={"User-Agent": "AllegaBot/1.0"}
+                ) as session:
                     async with session.post(url, json=payload, headers=headers) as resp:
                         text = await resp.text()
+                        logger.info(f"Resposta recebida: status={resp.status}, content_length={len(text)}")
+                        
                         if resp.status == 200:
                             try:
                                 data = await resp.json()
-                                logger.info("Abacus describeImage OK (status=200)")
+                                logger.info("✅ Abacus describeImage OK (status=200)")
                                 return data
                             except Exception as e:
                                 logger.warning(f"Resposta 200 mas JSON inválido: {e}; body (200 chars): {text[:200]}")
                                 raise
+                        elif resp.status == 503:
+                            logger.warning(f"Serviço indisponível (503): {text[:300]}")
+                            last_err = RuntimeError(f"Serviço Abacus indisponível: {text[:120]}")
+                        elif resp.status == 401:
+                            logger.error(f"Token inválido (401): {text[:300]}")
+                            raise RuntimeError(f"Token de acesso inválido")
                         else:
                             logger.warning(f"Abacus describeImage falhou status={resp.status}; body (300 chars): {text[:300]}")
                             last_err = RuntimeError(f"status={resp.status} body_start={text[:120]}")
-            except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-                logger.warning(f"Tentativa {attempt_idx} falhou (rede/timeout): {e}")
+                            
+            except (aiohttp.ClientConnectorError, asyncio.TimeoutError, aiohttp.ServerDisconnectedError) as e:
+                logger.warning(f"Tentativa {attempt_idx} falhou (rede/timeout): {type(e).__name__}: {e}")
+                last_err = e
+            except Exception as e:
+                logger.error(f"Tentativa {attempt_idx} falhou (erro inesperado): {type(e).__name__}: {e}")
                 last_err = e
 
             if wait is not None:
+                logger.info(f"Aguardando {wait}s antes da próxima tentativa...")
                 await asyncio.sleep(wait)
 
-        raise last_err or RuntimeError("Falha ao chamar Abacus describeImage após retries")
+        # Fechar connector
+        await connector.close()
+        
+        raise last_err or RuntimeError("Falha ao chamar Abacus describeImage após todas as tentativas")
 
     async def analyze_property_image(self, image_bytes: bytes, analysis_type: str = "complete") -> dict:
         """
@@ -136,7 +209,35 @@ class PropertyImageAnalyzer:
     def format_analysis_response(self, analysis_result: Dict, user_message: str) -> str:
         """Formata a resposta da análise para o usuário"""
         if not analysis_result.get("success", True):
-            return """
+            error_msg = analysis_result.get("error", "Erro desconhecido")
+            
+            # Mensagens específicas para diferentes tipos de erro
+            if "DNS resolution failure" in error_msg or "conectividade" in error_msg:
+                return """
+🔧 *Serviço de análise temporariamente indisponível*
+
+Nosso sistema de análise de imagens está com problemas de conectividade. 
+
+📞 *Entre em contato direto para análise manual:*
+🏠 Vendas: (41) 99214-6670
+🏡 Locação: (41) 99223-0874
+
+*Nossos especialistas analisarão sua imagem pessoalmente!*
+                """
+            elif "Token" in error_msg or "401" in error_msg:
+                return """
+🔧 *Sistema em manutenção*
+
+Nosso sistema de análise está sendo atualizado.
+
+📞 *Fale direto com nossos especialistas:*
+🏠 Vendas: (41) 99214-6670
+🏡 Locação: (41) 99223-0874
+
+*Eles analisarão sua imagem na hora!*
+                """
+            else:
+                return """
 😅 *Tive dificuldade para analisar esta imagem.*
 
 📸 *Dicas para melhores resultados:*
@@ -147,7 +248,7 @@ class PropertyImageAnalyzer:
 📞 *Ou fale direto com nossos especialistas:*
 🏠 Vendas: (41) 99214-6670
 🏡 Locação: (41) 99223-0874
-            """
+                """
 
         # Resposta padrão formatada
         response = "🏠 *Análise do Imóvel Concluída*\n\n"
@@ -480,16 +581,13 @@ Tente novamente ou entre em contato diretamente:
     def _get_analysis_error_response(self) -> str:
         """Resposta específica para erros de análise"""
         return """
-😅 *Tive dificuldade para analisar esta imagem.*
+🔧 *Sistema de análise temporariamente indisponível*
 
-📸 *Dicas para melhores resultados:*
-• Use fotos claras e bem iluminadas
-• Evite imagens muito distantes
-• Certifique-se que placas/textos estão visíveis
-
-📞 *Ou fale direto com nossos especialistas:*
+📞 *Nossos especialistas analisarão sua imagem pessoalmente:*
 🏠 Vendas: (41) 99214-6670
 🏡 Locação: (41) 99223-0874
+
+*Envie a imagem diretamente para eles via WhatsApp!*
         """
     
     def get_user_stats(self, user_id: str) -> Dict:
