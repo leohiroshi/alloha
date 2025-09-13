@@ -96,16 +96,7 @@ class PropertyImageAnalyzer:
             "Accept": "application/json"
         }
 
-        # Configurações de timeout mais robustas
-        connector = aiohttp.TCPConnector(
-            limit=10,
-            limit_per_host=5,
-            ttl_dns_cache=300,
-            use_dns_cache=True,
-            keepalive_timeout=30,
-            enable_cleanup_closed=True
-        )
-        
+        # Configurações de timeout
         timeout = aiohttp.ClientTimeout(
             total=total_timeout_sec,
             connect=connect_timeout_sec,
@@ -113,7 +104,7 @@ class PropertyImageAnalyzer:
             sock_connect=connect_timeout_sec
         )
 
-        backoffs = [1.0, 2.0, 4.0]  # 3 tentativas com backoff
+        backoffs = [1.0, 2.0, 4.0, 8.0]  # 4 tentativas com backoff exponencial
         last_err: Optional[Exception] = None
 
         logger.info(
@@ -121,9 +112,21 @@ class PropertyImageAnalyzer:
             f"has_prompt={bool(prompt)}, categories={categories or 'None'}"
         )
 
+        # CORREÇÃO: Criar connector e session por tentativa para evitar "Session is closed"
         for attempt_idx, wait in enumerate(backoffs + [None], start=1):
+            connector = None
             try:
                 logger.info(f"Tentativa {attempt_idx} de chamada para Abacus...")
+                
+                # Criar connector fresh para cada tentativa
+                connector = aiohttp.TCPConnector(
+                    limit=10,
+                    limit_per_host=5,
+                    ttl_dns_cache=300,
+                    use_dns_cache=True,
+                    keepalive_timeout=30,
+                    enable_cleanup_closed=True
+                )
                 
                 async with aiohttp.ClientSession(
                     timeout=timeout, 
@@ -142,15 +145,17 @@ class PropertyImageAnalyzer:
                             except Exception as e:
                                 logger.warning(f"Resposta 200 mas JSON inválido: {e}; body (200 chars): {text[:200]}")
                                 raise
-                        elif resp.status == 503:
-                            logger.warning(f"Serviço indisponível (503): {text[:300]}")
-                            last_err = RuntimeError(f"Serviço Abacus indisponível: {text[:120]}")
+                        elif resp.status in (429, 500, 502, 503, 504):
+                            # Códigos retentáveis
+                            logger.warning(f"Serviço temporariamente indisponível ({resp.status}): {text[:300]}")
+                            last_err = RuntimeError(f"Serviço Abacus indisponível ({resp.status}): {text[:120]}")
                         elif resp.status == 401:
                             logger.error(f"Token inválido (401): {text[:300]}")
                             raise RuntimeError(f"Token de acesso inválido")
                         else:
-                            logger.warning(f"Abacus describeImage falhou status={resp.status}; body (300 chars): {text[:300]}")
-                            last_err = RuntimeError(f"status={resp.status} body_start={text[:120]}")
+                            # Outros códigos não-retentáveis
+                            logger.error(f"Abacus describeImage falhou status={resp.status}; body (300 chars): {text[:300]}")
+                            raise RuntimeError(f"Erro não-retentável: status={resp.status} body_start={text[:120]}")
                             
             except (aiohttp.ClientConnectorError, asyncio.TimeoutError, aiohttp.ServerDisconnectedError) as e:
                 logger.warning(f"Tentativa {attempt_idx} falhou (rede/timeout): {type(e).__name__}: {e}")
@@ -158,16 +163,19 @@ class PropertyImageAnalyzer:
             except Exception as e:
                 logger.error(f"Tentativa {attempt_idx} falhou (erro inesperado): {type(e).__name__}: {e}")
                 last_err = e
+            finally:
+                # Fechar connector desta tentativa
+                if connector:
+                    await connector.close()
 
+            # Se chegou aqui, a tentativa falhou - aguardar antes da próxima
             if wait is not None:
                 logger.info(f"Aguardando {wait}s antes da próxima tentativa...")
                 await asyncio.sleep(wait)
 
-        # Fechar connector
-        await connector.close()
-        
-        raise last_err or RuntimeError("Falha ao chamar Abacus describeImage após todas as tentativas")
-
+        # Se chegou aqui, todas as tentativas falharam
+        raise RuntimeError(f"Erro ao analisar imagem após {len(backoffs)} tentativas: {last_err}")
+    
     async def analyze_property_image(self, image_bytes: bytes, analysis_type: str = "complete") -> dict:
         """
         Analisa a imagem de imóvel usando o deployment configurado, com retries/robustez.
