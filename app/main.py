@@ -37,20 +37,7 @@ PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 
 # Inicializar serviços
 whatsapp_service = WhatsAppService(ACCESS_TOKEN, PHONE_NUMBER_ID)
-
-@app.on_event("startup")
-async def startup_event():
-    """Evento executado na inicialização do app"""
-    logger.info("🚀 Iniciando Allega Imóveis WhatsApp Bot...")
     
-    # Inicializar o sistema inteligente
-    success = await intelligent_bot.initialize()
-    
-    if success:
-        logger.info("✅ Sistema de inteligência imobiliária iniciado com sucesso!")
-    else:
-        logger.warning("⚠️ Sistema iniciado em modo degradado")
-
 @app.get("/")
 async def root():
     return {
