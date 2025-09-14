@@ -360,6 +360,33 @@ class FirebaseService:
         except Exception as e:
             logger.error(f"❌ Erro ao listar usuários: {str(e)}")
             return []
+    
+    async def add_properties(self, properties):
+        """Adiciona novos imóveis à coleção 'properties'."""
+        db = firestore.client()
+        batch = db.batch()
+        for prop in properties:
+            ref = db.collection('properties').document(prop['reference'])
+            batch.set(ref, prop)
+        batch.commit()
+
+    async def remove_properties(self, references):
+        """Remove imóveis da coleção 'properties' pelo reference."""
+        db = firestore.client()
+        batch = db.batch()
+        for ref_id in references:
+            ref = db.collection('properties').document(ref_id)
+            batch.delete(ref)
+        batch.commit()
+
+    async def update_properties(self, properties):
+        """Atualiza imóveis existentes na coleção 'properties'."""
+        db = firestore.client()
+        batch = db.batch()
+        for prop in properties:
+            ref = db.collection('properties').document(prop['reference'])
+            batch.update(ref, prop)
+        batch.commit()
 
 # Instância global
 firebase_service = FirebaseService()
