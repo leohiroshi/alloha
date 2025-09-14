@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import aiohttp
 import base64
+from llama_index import GPTVectorStoreIndex
 
 
 logger = logging.getLogger("IntelligentRealEstateBot")
@@ -101,6 +102,21 @@ class IntelligentRealEstateBot:
                 "🏡 Locação: (41) 99223-0874"
             )
 
+    async def process_property_search(self, user_query: str) -> str:
+        """
+        Busca imóveis usando o índice inteligente.
+        """
+        index = self.property_index
+        if not index:
+            return "😅 O índice de imóveis não está disponível no momento. Tente novamente mais tarde."
+
+        try:
+            response = index.query(user_query)
+            return str(response)
+        except Exception as e:
+            logger.error(f"Erro ao consultar o índice: {str(e)}")
+            return "😅 Não consegui buscar imóveis agora. Tente novamente em instantes."
+
     def _build_prompt(self, message: str, user_phone: str) -> str:
         """Constrói o prompt para o LLaMA 3.1"""
         return (
@@ -141,6 +157,25 @@ class IntelligentRealEstateBot:
                 "📞 Vendas: (41) 99214-6670\n"
                 "🏡 Locação: (41) 99223-0874"
             )
+
+    def _is_property_search(self, message: str) -> bool:
+        """
+        Detecta se a mensagem é uma busca de imóvel.
+        """
+        keywords = ["casa", "apartamento", "imóvel", "quartos", "bairro", "comprar", "alugar", "locação"]
+        return any(kw in message.lower() for kw in keywords)
+
+    @property
+    def property_index(self) -> Optional[GPTVectorStoreIndex]:
+        """
+        Retorna o índice de busca inteligente dos imóveis, se existir.
+        """
+        try:
+            index = GPTVectorStoreIndex.load_from_disk("property_index.json")
+            return index
+        except Exception as e:
+            logger.error(f"Erro ao carregar o índice de imóveis: {str(e)}")
+            return None
 
 # Instância global do bot
 intelligent_bot = IntelligentRealEstateBot()

@@ -15,6 +15,7 @@ import json
 from datetime import datetime
 
 from app.services.firebase_service import FirebaseService
+from llama_index import SimpleDirectoryReader, GPTVectorStoreIndex
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -481,6 +482,14 @@ class AllegaPropertyScraper:
         return knowledge_base
 
 
+def create_property_index(json_folder: str = "data_folder"):
+    """Cria um índice inteligente dos imóveis usando LlamaIndex"""
+    documents = SimpleDirectoryReader(json_folder).load_data()
+    index = GPTVectorStoreIndex.from_documents(documents)
+    index.save_to_disk("property_index.json")
+    return index
+
+
 async def monitor_scraper(interval_minutes: int = 30, max_properties: int = 100):
     """Executa o scraper periodicamente e sincroniza com Firebase."""
     scraper = AllegaPropertyScraper()
@@ -542,10 +551,13 @@ async def scrape_allega_properties(max_properties: int = 100) -> Dict[str, Any]:
     
     # Salvar dados brutos
     filename = scraper.save_properties_to_file(properties)
-    
-    # Formatar para IA
     knowledge_base = scraper.format_for_ai_training(properties)
-    
+
+    # Cria o índice para busca rápida
+    import os
+    data_folder = os.path.dirname(filename)
+    create_property_index(json_folder=data_folder)
+
     logger.info(f"Extração concluída: {len(properties)} imóveis processados")
     
     return {

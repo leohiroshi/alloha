@@ -13,14 +13,16 @@ import aiohttp
 import socket
 import random
 import base64
+from llama_index import GPTVectorStoreIndex
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PropertyImageAnalyzer:
-    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.2-vision"):
+    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.2-vision", index_path: str = "property_index.json"):
         self.ollama_url = ollama_url
         self.model = model
+        self.index_path = index_path
 
     async def analyze_property_image(self, image_bytes: bytes, prompt: str = "Analyze this property image") -> dict:
         try:
@@ -40,12 +42,48 @@ class PropertyImageAnalyzer:
                     logger.info(f"Resposta recebida: status={resp.status}, body={text[:200]}")
                     if resp.status == 200:
                         result = await resp.json()
-                        return {"success": True, "response": result}
+                        # Tenta extrair características do imóvel da resposta da IA
+                        llm_content = result.get("message", {}).get("content", "")
+                        extracted_query = self._extract_query_from_llm(llm_content)
+                        index_response = None
+                        if extracted_query:
+                            index_response = self.query_property_index(extracted_query)
+                        return {
+                            "success": True,
+                            "response": result,
+                            "index_query": extracted_query,
+                            "index_response": str(index_response) if index_response else None
+                        }
                     else:
                         return {"success": False, "error": f"Status {resp.status}: {text}"}
         except Exception as e:
             logger.error(f"Erro ao analisar imagem com LLaMA 3.2 Vision: {e}")
             return {"success": False, "error": str(e)}
+
+    def _extract_query_from_llm(self, llm_content: str) -> str:
+        """
+        Extrai uma consulta textual do conteúdo gerado pela IA Vision.
+        Exemplo: busca por 'casa 3 quartos Bigorrilho'
+        """
+        # Simples heurística: pega a primeira frase que contém tipo, quartos e bairro
+        import re
+        match = re.search(r'(casa|apartamento|imóvel)[^\n]*?(\d+)\s*quartos?[^\n]*?(bigorrilho|batel|centro|cabral|champagnat)', llm_content, re.IGNORECASE)
+        if match:
+            return match.group(0)
+        # Fallback: retorna a primeira frase
+        return llm_content.split('.')[0] if llm_content else ""
+
+    def query_property_index(self, query: str):
+        """
+        Consulta o índice inteligente de imóveis usando LlamaIndex.
+        """
+        try:
+            index = GPTVectorStoreIndex.load_from_disk(self.index_path)
+            response = index.query(query)
+            return response
+        except Exception as e:
+            logger.error(f"Erro ao consultar o índice de imóveis: {str(e)}")
+            return None
 
     def format_analysis_response(self, analysis_result: Dict, user_message: str) -> str:
         if not analysis_result.get("success", True):
@@ -55,6 +93,8 @@ class PropertyImageAnalyzer:
         response = "🏠 *Análise do Imóvel Concluída*\n\n"
         llm_response = analysis_result.get("response", {}).get("message", {}).get("content", "")
         response += f"{llm_response}\n\n"
+        if analysis_result.get("index_response"):
+            response += f"🔎 *Imóveis similares encontrados:*\n{analysis_result['index_response']}\n\n"
         response += "💡 *Análise concluída!*\n"
         response += "📞 *Quer mais informações? Entre em contato:*\n"
         response += "🏠 Vendas: (41) 99214-6670\n"

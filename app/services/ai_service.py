@@ -4,6 +4,7 @@ import os
 import re
 from typing import Optional, Dict, Any
 from datetime import datetime
+from llama_index import GPTVectorStoreIndex
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,16 @@ class AIService:
             except ImportError:
                 self._property_intelligence = None
         return self._property_intelligence
+
+    @property
+    def property_index(self) -> Optional[GPTVectorStoreIndex]:
+        """Retorna o índice de busca inteligente dos imóveis, se existir."""
+        try:
+            index = GPTVectorStoreIndex.load_from_disk("property_index.json")
+            return index
+        except Exception as e:
+            logger.error(f"Erro ao carregar o índice de imóveis: {str(e)}")
+            return None
 
     async def generate_response(self, message: str, user_phone: str, image_bytes: bytes = None) -> str:
         try:
@@ -157,8 +168,35 @@ O que você procura hoje?"""
         else:
             return "Olá novamente! Como posso ajudá-lo hoje? 😊"
 
+    @property
+    def property_index(self) -> Optional[GPTVectorStoreIndex]:
+        """Retorna o índice de busca inteligente dos imóveis, se existir."""
+        try:
+            index = GPTVectorStoreIndex.load_from_disk("property_index.json")
+            return index
+        except Exception as e:
+            logger.error(f"Erro ao carregar o índice de imóveis: {str(e)}")
+            return None
+
+    def query_property_index(self, query: str) -> Optional[str]:
+        """Consulta o índice inteligente de imóveis usando LlamaIndex."""
+        index = self.property_index
+        if not index:
+            return None
+        try:
+            response = index.query(query)
+            return str(response)
+        except Exception as e:
+            logger.error(f"Erro ao consultar o índice de imóveis: {str(e)}")
+            return None
+
     async def _handle_property_search(self, message: str, intent: Dict, context: Dict) -> str:
         try:
+            # Consulta o índice inteligente primeiro
+            index_response = self.query_property_index(message)
+            if index_response:
+                return f"🔎 *Busca inteligente de imóveis:*\n{index_response}\n\n"
+
             if self.property_intelligence:
                 user_id = context.get('user_phone', 'unknown')
                 response = await self.property_intelligence.process_property_inquiry(message, user_id)

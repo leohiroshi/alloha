@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import re
 import aiohttp
+from llama_index import GPTVectorStoreIndex
 
 from .firebase_service import FirebaseService
 
@@ -302,18 +303,46 @@ class PropertyIntelligenceService:
             f"_CRECI {self.company_info['creci']} - Profissionais Certificados_"
         )
 
+    @property
+    def property_index(self) -> Optional[GPTVectorStoreIndex]:
+        """Retorna o índice de busca inteligente dos imóveis, se existir."""
+        try:
+            index = GPTVectorStoreIndex.load_from_disk("property_index.json")
+            return index
+        except Exception as e:
+            logger.error(f"Erro ao carregar o índice de imóveis: {str(e)}")
+            return None
+
+    def query_property_index(self, query: str) -> Optional[str]:
+        """Consulta o índice inteligente de imóveis usando LlamaIndex."""
+        index = self.property_index
+        if not index:
+            return None
+        try:
+            response = index.query(query)
+            return str(response)
+        except Exception as e:
+            logger.error(f"Erro ao consultar o índice de imóveis: {str(e)}")
+            return None
+
     async def process_property_inquiry(self, message: str, user_id: str) -> str:
-        """Processa consulta sobre imóveis usando LLaMA 3.1"""
+        """Processa consulta sobre imóveis usando LLaMA 3.1 e o índice inteligente"""
         try:
             await self.load_property_data()
             criteria = self.extract_search_criteria(message)
             logger.info(f"Busca de imóveis - User: {user_id}, Critérios: {criteria}")
-            properties = self.search_properties(criteria)
-            await self.firebase_service.save_property_search(user_id, criteria, len(properties))
-            response = self.format_property_response(properties, criteria)
+
+            # Consulta o índice inteligente primeiro
+            index_response = self.query_property_index(message)
+            if index_response:
+                response = f"🔎 *Busca inteligente de imóveis:*\n{index_response}\n\n"
+            else:
+                properties = self.search_properties(criteria)
+                await self.firebase_service.save_property_search(user_id, criteria, len(properties))
+                response = self.format_property_response(properties, criteria)
 
             # Chama LLaMA 3.1 para enriquecer a resposta
-            llama_response = await self._call_llama_property_assistant(message, criteria, properties)
+            llama_response = await self._call_llama_property_assistant(message, criteria, [])
             if llama_response:
                 response += f"\n\n🤖 *Dica da IA:*\n{llama_response}"
 
