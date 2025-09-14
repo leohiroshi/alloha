@@ -12,655 +12,120 @@ import os
 import aiohttp
 import socket
 import random
+import base64
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PropertyImageAnalyzer:
-    def __init__(self, deployment_token: str, deployment_id: str):
-        self.deployment_token = deployment_token
-        self.deployment_id = deployment_id
-        self.abacus_api_key = os.getenv("ABACUS_API_KEY", "")
-        
-        if not self.abacus_api_key:
-            logger.warning("ABACUS_API_KEY não configurado - análise de imagem não funcionará")
-        else:
-            logger.info(f"ABACUS_API_KEY configurado: {self.abacus_api_key[:10]}...")
+    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.2-vision"):
+        self.ollama_url = ollama_url
+        self.model = model
 
-    async def test_dns_connectivity(self, host: str = "apps.abacus.ai") -> bool:
-        """Testa conectividade DNS e rede com Abacus"""
+    async def analyze_property_image(self, image_bytes: bytes, prompt: str = "Analyze this property image") -> dict:
         try:
-            logger.info(f"Testando DNS para {host}...")
-            
-            # Resolver DNS
-            try:
-                ip = socket.gethostbyname(host)
-                logger.info(f"DNS OK: {host} -> {ip}")
-            except socket.gaierror as e:
-                logger.error(f"DNS FALHOU: {host} -> {e}")
-                return False
-            
-            # Teste HTTP básico
-            url = f"https://{host}"
-            timeout = aiohttp.ClientTimeout(total=10, connect=5)
-            
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as resp:
-                    logger.info(f"HTTP conectividade OK: status={resp.status}")
-                    return True
-                    
-        except Exception as e:
-            logger.error(f"Teste de conectividade falhou: {e}")
-            return False
-
-    async def abacus_describe_image(
-            self,
-            image_bytes: bytes,
-            prompt: Optional[str] = None,
-            categories: Optional[List[str]] = None,
-            total_timeout_sec: int = 45,
-            connect_timeout_sec: int = 15,
-        ) -> Dict[str, Any]:
-        """
-        Chama o endpoint /describeImage do Abacus conforme documentação oficial.
-        URL: https://apps.abacus.ai/api/v0/describeImage
-        Documentação: https://abacus.ai/help/ref/predict/describeImage
-        """
-        if not self.deployment_token or not self.deployment_id:
-            raise RuntimeError("deployment_token/deployment_id não configurados")
-        if not image_bytes:
-            raise ValueError("image_bytes vazio")
-        if not categories:
-            # describeImage REQUER categories - usar padrão baseado no contexto
-            categories = ["residential", "commercial", "apartment", "house", "available", "sold"]
-
-        # Teste de conectividade primeiro
-        logger.info("Testando conectividade antes da chamada...")
-        connectivity_ok = await self.test_dns_connectivity("apps.abacus.ai")
-        if not connectivity_ok:
-            raise RuntimeError("Falha na conectividade com Abacus (apps.abacus.ai) - DNS ou rede indisponível")
-
-        # URL conforme documentação oficial
-        url = "https://apps.abacus.ai/api/v0/describeImage"
-
-        timeout = aiohttp.ClientTimeout(
-            total=total_timeout_sec,
-            connect=connect_timeout_sec,
-            sock_read=20,
-            sock_connect=connect_timeout_sec,
-        )
-
-        # Backoff exponencial com jitter
-        backoffs = [1.0, 2.0, 4.0, 8.0]
-        last_err: Optional[Exception] = None
-
-        logger.info(
-            f"Abacus describeImage → bytes={len(image_bytes)}, categories={categories}, url={url}"
-        )
-
-        for attempt_idx, wait in enumerate(backoffs + [None], start=1):
-            connector = None
-            try:
-                logger.info(f"Tentativa {attempt_idx} de chamada para Abacus...")
-
-                connector = aiohttp.TCPConnector(
-                    limit=10,
-                    limit_per_host=5,
-                    ttl_dns_cache=300,
-                    use_dns_cache=True,
-                    keepalive_timeout=30,
-                    enable_cleanup_closed=True,
-                )
-
-                # Montar multipart form conforme documentação
-                form = aiohttp.FormData()
-                form.add_field("deploymentToken", self.deployment_token)
-                form.add_field("deploymentId", self.deployment_id)
-                
-                # Enviar categories como múltiplos campos (padrão mais compatível)
-                for category in categories:
-                    form.add_field("categories", category)
-                
-                # Opcional: topN
-                form.add_field("topN", "10")
-
-                # Adicionar o binário da imagem
-                form.add_field(
-                    "image",
-                    image_bytes,
-                    filename="property.jpg",
-                    content_type="application/octet-stream",
-                )
-
-                # Headers sem Authorization - usar apenas deploymentToken conforme docs
-                headers = {
-                    "Accept": "application/json",
-                    "User-Agent": "AllegaBot/1.0",
-                }
-
-                async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                    async with session.post(url, data=form, headers=headers) as resp:
-                        text = await resp.text()
-                        logger.info(f"Resposta recebida: status={resp.status}, content_length={len(text)}")
-
-                        if resp.status == 200:
-                            try:
-                                data = await resp.json()
-                                logger.info("✅ Abacus describeImage OK (status=200)")
-                                return data
-                            except Exception as e:
-                                logger.warning(f"Resposta 200 mas JSON inválido: {e}; body (200 chars): {text[:200]}")
-                                raise
-
-                        # Tratamento específico do 409 - endpoint incorreto
-                        if resp.status == 409 and "not available through this endpoint" in text:
-                            logger.error(f"409: Endpoint incorreto ou deployment inválido: {text[:300]}")
-                            raise RuntimeError(f"Deployment {self.deployment_id} não suporta describeImage ou endpoint incorreto")
-
-                        # Códigos retentáveis
-                        if resp.status in (429, 500, 502, 503, 504, 522, 523, 524):
-                            logger.warning(f"Serviço temporariamente indisponível ({resp.status}): {text[:300]}")
-                            last_err = RuntimeError(f"Serviço Abacus indisponível ({resp.status}): {text[:120]}")
-                        elif resp.status in (401, 403):
-                            logger.error(f"Auth falhou ({resp.status}): {text[:300]}")
-                            raise RuntimeError("Falha de autenticação com Abacus (verifique deploymentToken/deploymentId)")
-                        else:
-                            logger.error(f"Abacus describeImage falhou status={resp.status}; body (300 chars): {text[:300]}")
-                            raise RuntimeError(f"Erro não-retentável: status={resp.status} body_start={text[:120]}")
-
-            except (aiohttp.ClientConnectorError, asyncio.TimeoutError, aiohttp.ServerDisconnectedError) as e:
-                logger.warning(f"Tentativa {attempt_idx} falhou (rede/timeout): {type(e).__name__}: {e}")
-                last_err = e
-            except Exception as e:
-                logger.error(f"Tentativa {attempt_idx} falhou (erro inesperado): {type(e).__name__}: {e}")
-                last_err = e
-            finally:
-                if connector:
-                    await connector.close()
-
-            if wait is not None:
-                # Jitter para evitar thundering herd
-                jitter = random.uniform(0, 0.4)
-                sleep_for = wait + jitter
-                logger.info(f"Aguardando {sleep_for:.1f}s antes da próxima tentativa...")
-                await asyncio.sleep(sleep_for)
-
-        raise RuntimeError(f"Erro ao analisar imagem após {len(backoffs)} tentativas: {last_err}")
-    
-    async def analyze_property_image(self, image_bytes: bytes, analysis_type: str = "complete") -> dict:
-        """
-        Analisa a imagem de imóvel usando o deployment configurado.
-        """
-        try:
-            logger.info(f"Analisando imagem ({len(image_bytes)} bytes), tipo: {analysis_type}")
-
-            # Mapear analysis_type para categories apropriadas
-            category_mapping = {
-                "complete": ["residential", "commercial", "apartment", "house", "available", "condition"],
-                "availability": ["available", "sold", "rented", "vacant"],
-                "contact": ["signage", "contact", "phone", "company"],
-                "type": ["residential", "commercial", "apartment", "house", "office"],
-                "condition": ["new", "good", "fair", "poor", "renovation"]
+            logger.info(f"Analisando imagem ({len(image_bytes)} bytes) com LLaMA 3.2 Vision")
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+            payload = {
+                "model": self.model,
+                "messages": [{
+                    "role": "user",
+                    "content": prompt,
+                    "images": [image_b64]
+                }]
             }
-            
-            categories = category_mapping.get(analysis_type, ["residential", "commercial", "available"])
-
-            result = await self.abacus_describe_image(
-                image_bytes=image_bytes,
-                categories=categories,
-            )
-
-            logger.info(f"Resultado da análise recebido com sucesso")
-            
-            # Processar resultado do describeImage
-            if result.get("success"):
-                # Extrair informações da resposta
-                prediction = result.get("result", {})
-                
-                # Formatar resposta para compatibilidade com o resto do código
-                formatted_result = {
-                    "success": True,
-                    "prediction": prediction,
-                    "categories_analyzed": categories,
-                    "analysis_type": analysis_type,
-                    "raw_response": result
-                }
-                
-                return formatted_result
-            else:
-                return {"success": False, "error": result.get("error", "Análise falhou")}
-
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{self.ollama_url}/api/chat", json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    text = await resp.text()
+                    logger.info(f"Resposta recebida: status={resp.status}, body={text[:200]}")
+                    if resp.status == 200:
+                        result = await resp.json()
+                        return {"success": True, "response": result}
+                    else:
+                        return {"success": False, "error": f"Status {resp.status}: {text}"}
         except Exception as e:
-            logger.error(f"Erro ao analisar imagem: {e}")
+            logger.error(f"Erro ao analisar imagem com LLaMA 3.2 Vision: {e}")
             return {"success": False, "error": str(e)}
 
-    async def check_property_availability_by_image(self, image_bytes: bytes) -> dict:
-        """Verifica disponibilidade específica do imóvel"""
-        try:
-            analysis = await self.analyze_property_image(image_bytes, analysis_type="availability")
-            
-            if not analysis.get("success"):
-                return {
-                    "is_available": None,
-                    "confidence": 0,
-                    "reasoning": "Não foi possível analisar a imagem",
-                    "recommendation": "Entre em contato para confirmar disponibilidade"
-                }
-            
-            # Processar resultado do describeImage para availability
-            prediction = analysis.get("prediction", {})
-            
-            # Lógica para determinar disponibilidade baseada na resposta
-            # (ajustar conforme formato real da resposta)
-            availability_indicators = ["available", "vacant", "for_sale", "for_rent"]
-            unavailable_indicators = ["sold", "rented", "occupied"]
-            
-            is_available = None
-            confidence = 5  # padrão médio
-            reasoning = "Análise baseada em indicadores visuais"
-            
-            # Aqui você processaria a resposta real do describeImage
-            # Por enquanto, retorno padrão
-            
-            return {
-                "is_available": is_available,
-                "confidence": confidence,
-                "reasoning": reasoning,
-                "recommendation": "Entre em contato para confirmar disponibilidade"
-            }
-            
-        except Exception as e:
-            logger.error(f"Erro verificando disponibilidade: {e}")
-            return {
-                "is_available": None,
-                "confidence": 0,
-                "reasoning": f"Erro na análise: {str(e)}",
-                "recommendation": "Entre em contato para confirmar disponibilidade"
-            }
-
     def format_analysis_response(self, analysis_result: Dict, user_message: str) -> str:
-        """Formata a resposta da análise para o usuário"""
         if not analysis_result.get("success", True):
             error_msg = analysis_result.get("error", "Erro desconhecido")
-            
-            # Mensagens específicas para diferentes tipos de erro
-            if "DNS resolution failure" in error_msg or "conectividade" in error_msg:
-                return """
-🔧 *Serviço de análise temporariamente indisponível*
+            return f"😅 *Tive dificuldade para analisar esta imagem.*\n\nErro: {error_msg}\n\n📞 *Fale direto com nossos especialistas:*\n🏠 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
 
-Nosso sistema de análise de imagens está com problemas de conectividade. 
-
-📞 *Entre em contato direto para análise manual:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-*Nossos especialistas analisarão sua imagem pessoalmente!*
-                """
-            elif "Token" in error_msg or "401" in error_msg or "403" in error_msg:
-                return """
-🔧 *Sistema em manutenção*
-
-Nosso sistema de análise está sendo atualizado.
-
-📞 *Fale direto com nossos especialistas:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-*Eles analisarão sua imagem na hora!*
-                """
-            elif "409" in error_msg or "deployment" in error_msg:
-                return """
-🔧 *Sistema de análise em configuração*
-
-Estamos ajustando nosso sistema para melhor atendê-lo.
-
-📞 *Nossos especialistas estão prontos para ajudar:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-*Envie sua imagem diretamente para eles!*
-                """
-            else:
-                return """
-😅 *Tive dificuldade para analisar esta imagem.*
-
-📸 *Dicas para melhores resultados:*
-• Use fotos claras e bem iluminadas
-• Evite imagens muito distantes
-• Certifique-se que placas/textos estão visíveis
-
-📞 *Ou fale direto com nossos especialistas:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-                """
-
-        # Resposta de sucesso - processar resultado do describeImage
         response = "🏠 *Análise do Imóvel Concluída*\n\n"
-        
-        prediction = analysis_result.get("prediction", {})
-        categories = analysis_result.get("categories_analyzed", [])
-        
-        # Adicionar informações baseadas nas categories analisadas
-        response += f"🔍 *Categorias analisadas:* {', '.join(categories)}\n"
-        
-        # Aqui você processaria os resultados específicos do describeImage
-        # Por exemplo, se retornar scores para cada categoria:
-        if isinstance(prediction, dict):
-            response += "\n📊 *Resultados da análise:*\n"
-            # Processar scores/resultados conforme formato real da API
-            response += "• Análise detalhada realizada com sucesso\n"
-        
-        response += "\n💡 *Análise concluída!*\n"
-        response += "\n📞 *Quer mais informações? Entre em contato:*\n"
+        llm_response = analysis_result.get("response", {}).get("message", {}).get("content", "")
+        response += f"{llm_response}\n\n"
+        response += "💡 *Análise concluída!*\n"
+        response += "📞 *Quer mais informações? Entre em contato:*\n"
         response += "🏠 Vendas: (41) 99214-6670\n"
         response += "🏡 Locação: (41) 99223-0874"
-        
         return response
 
-# Instância global
-property_image_analyzer = PropertyImageAnalyzer(
-    deployment_token="0c3a137697cb4bc8aee4415dd291fa1b",
-    deployment_id="e0a6b28e0"
-)
+property_image_analyzer = PropertyImageAnalyzer()
 
 class PropertyChatbot:
-    """Chatbot especializado em análise de imóveis"""
-    
     def __init__(self):
         self.analyzer = property_image_analyzer
         self.conversation_history = {}
-        
-        # Respostas padrão do chatbot
+
         self.responses = {
-            'greeting': """
-🏠 *Olá! Sou o assistente da Allega Imóveis!*
-
-Posso te ajudar com:
-• 📸 Analisar fotos de imóveis
-• 🔍 Verificar disponibilidade
-• 📞 Encontrar contatos de imobiliárias
-• 💰 Estimar características e valores
-
-*Como posso ajudar você hoje?*
-
-📞 Contatos diretos:
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-            """,
-            
-            'help': """
-🤖 *Como usar o assistente:*
-
-📸 *Para analisar imóveis:*
-• Envie uma foto do imóvel
-• Eu analiso automaticamente
-• Receba informações detalhadas
-
-💬 *Comandos úteis:*
-• "analisar" - para análise detalhada
-• "disponibilidade" - verificar se está disponível
-• "contatos" - extrair telefones da imagem
-• "ajuda" - ver esta mensagem
-
-📞 *Precisa de mais ajuda?*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-            """,
-            
-            'no_image': """
-📸 *Preciso de uma imagem para analisar!*
-
-Envie uma foto do imóvel que você quer analisar e eu te ajudo com:
-• Tipo de imóvel
-• Características principais
-• Status de disponibilidade
-• Contatos da imobiliária
-• Recomendações
-
-*Dica:* Use fotos claras e bem iluminadas para melhores resultados!
-            """
+            'greeting': "🏠 *Olá! Sou o assistente da Allega Imóveis!*\n\nEnvie uma foto de imóvel para análise ou digite 'ajuda' para ver comandos.\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874",
+            'help': "🤖 *Como usar o assistente:*\n\n• Envie uma foto do imóvel\n• Eu analiso automaticamente\n• Receba informações detalhadas\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874",
+            'no_image': "📸 *Preciso de uma imagem para analisar!*\n\nEnvie uma foto do imóvel que você quer analisar.\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
         }
-    
+
     async def process_message(self, user_id: str, message: str, image_data: bytes = None) -> str:
-        """Processa mensagem do usuário (texto + imagem opcional)"""
         try:
-            # Salvar histórico
             if user_id not in self.conversation_history:
                 self.conversation_history[user_id] = []
-            
+
             self.conversation_history[user_id].append({
                 'timestamp': datetime.now().isoformat(),
                 'message': message,
                 'has_image': bool(image_data)
             })
-            
-            # Processar mensagem
+
             message_lower = message.lower().strip()
-            
-            # Comandos especiais
+
             if any(word in message_lower for word in ['oi', 'olá', 'hello', 'início', 'start']):
                 return self.responses['greeting']
-            
             elif any(word in message_lower for word in ['ajuda', 'help', 'comandos']):
                 return self.responses['help']
-            
-            # Se tem imagem, processar análise
             elif image_data:
                 return await self._process_image_analysis(user_id, message, image_data)
-            
-            # Se não tem imagem mas pede análise
             elif any(word in message_lower for word in ['analisar', 'análise', 'foto', 'imagem']):
                 return self.responses['no_image']
-            
-            # Resposta padrão para texto sem imagem
             else:
-                return await self._process_text_only(message)
-                
+                return self._default_text_response(message)
         except Exception as e:
             logger.error(f"Erro processando mensagem: {str(e)}")
             return self._get_error_response()
-    
+
     async def _process_image_analysis(self, user_id: str, message: str, image_data: bytes) -> str:
-        """Processa análise de imagem"""
         try:
-            # Determinar tipo de análise baseado na mensagem
-            analysis_type = self._determine_analysis_type(message)
-            
-            # Executar análise
-            logger.info(f"Iniciando análise de imagem para usuário {user_id} - Tipo: {analysis_type}")
-            analysis_result = await self.analyzer.analyze_property_image(image_data, analysis_type)
-            
-            # Salvar resultado no histórico
+            prompt = f"Analyze this property image. User message: {message}"
+            analysis_result = await self.analyzer.analyze_property_image(image_data, prompt)
             self.conversation_history[user_id].append({
                 'timestamp': datetime.now().isoformat(),
-                'analysis_result': analysis_result.get('prediction', {}),
-                'analysis_type': analysis_type
+                'analysis_result': analysis_result,
             })
-            
-            # Formatar resposta baseada no tipo de análise
-            if analysis_type == "availability":
-                return await self._format_availability_response(analysis_result, image_data)
-            elif analysis_type == "contact":
-                return await self._format_contact_response(analysis_result)
-            else:
-                return self.analyzer.format_analysis_response(analysis_result, message)
-                
+            return self.analyzer.format_analysis_response(analysis_result, message)
         except Exception as e:
             logger.error(f"Erro na análise de imagem: {str(e)}")
             return self._get_analysis_error_response()
-    
-    def _determine_analysis_type(self, message: str) -> str:
-        """Determina o tipo de análise baseado na mensagem do usuário"""
-        message_lower = message.lower()
-        
-        if any(word in message_lower for word in ['disponível', 'disponibilidade', 'livre', 'ocupado', 'vago']):
-            return "availability"
-        elif any(word in message_lower for word in ['contato', 'telefone', 'whatsapp', 'imobiliária']):
-            return "contact"
-        elif any(word in message_lower for word in ['tipo', 'categoria', 'casa', 'apartamento']):
-            return "type"
-        elif any(word in message_lower for word in ['estado', 'condição', 'conservação']):
-            return "condition"
-        else:
-            return "complete"
-    
-    async def _format_availability_response(self, analysis: Dict, image_data: bytes) -> str:
-        """Formata resposta específica para disponibilidade"""
-        try:
-            if not analysis.get('success', True):
-                return "😅 Não consegui determinar a disponibilidade desta imagem. Tente com uma foto mais clara!"
-            
-            # Usar o método específico do analyzer
-            availability_check = await self.analyzer.check_property_availability_by_image(image_data)
-            
-            response = "🔍 *Verificação de Disponibilidade*\n\n"
-            
-            if availability_check['is_available'] is True:
-                response += "✅ *APARENTA ESTAR DISPONÍVEL*\n"
-            elif availability_check['is_available'] is False:
-                response += "❌ *APARENTA ESTAR INDISPONÍVEL*\n"
-            else:
-                response += "❓ *STATUS INCERTO*\n"
-            
-            response += f"\n💡 *Análise:* {availability_check['reasoning'][:100]}...\n"
-            response += f"🎯 *Confiança:* {availability_check['confidence']}/10\n"
-            response += f"\n📋 *Recomendação:* {availability_check['recommendation']}\n"
-            
-            # Adicionar contatos padrão
-            response += "\n📞 *Quer confirmar? Entre em contato:*\n"
-            response += "🏠 Vendas: (41) 99214-6670\n"
-            response += "🏡 Locação: (41) 99223-0874"
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Erro formatando resposta de disponibilidade: {str(e)}")
-            return self._get_analysis_error_response()
-    
-    async def _format_contact_response(self, analysis: Dict) -> str:
-        """Formata resposta específica para contatos"""
-        try:
-            response = "📞 *Análise de Contatos na Imagem*\n\n"
-            
-            if not analysis.get('success'):
-                response = "😅 *Não consegui extrair contatos desta imagem.*\n\n"
-                response += "💡 *Dicas:*\n"
-                response += "• Certifique-se que há placas ou anúncios visíveis\n"
-                response += "• Use uma foto mais próxima dos textos\n"
-                response += "• Verifique se a imagem está nítida\n\n"
-            else:
-                # Processar resultado do describeImage para contatos
-                prediction = analysis.get('prediction', {})
-                response += "🔍 *Análise realizada com sucesso*\n"
-                response += "📋 *Verifique a imagem para contatos visíveis*\n\n"
-            
-            # Sempre adicionar contatos da Allega
-            response += "📞 *Nossos contatos para ajudar:*\n"
-            response += "🏠 Vendas: (41) 99214-6670\n"
-            response += "🏡 Locação: (41) 99223-0874"
-            
-            return response
-            
-        except Exception as e:
-            logger.error(f"Erro formatando resposta de contatos: {str(e)}")
-            return self._get_analysis_error_response()
-    
-    async def _process_text_only(self, message: str) -> str:
-        """Processa mensagens apenas de texto"""
-        message_lower = message.lower()
-        
-        # Perguntas sobre serviços
-        if any(word in message_lower for word in ['preço', 'valor', 'quanto custa']):
-            return """
-💰 *Consulta de Preços*
 
-Para te dar informações precisas sobre preços, preciso saber:
-• Que tipo de imóvel você procura?
-• Em qual região/bairro?
-• Quantos quartos?
+    def _default_text_response(self, message: str) -> str:
+        return "🤖 *Não entendi bem sua mensagem.*\n\nEnvie uma foto de um imóvel ou digite 'ajuda' para ver todos os comandos.\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
 
-📸 *Ou envie uma foto* do imóvel que te interessou!
-
-📞 *Fale direto com nossos especialistas:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-            """
-        
-        elif any(word in message_lower for word in ['visita', 'agendar', 'ver imóvel']):
-            return """
-📅 *Agendamento de Visitas*
-
-Quer agendar uma visita? É só entrar em contato:
-
-📞 *Nossos especialistas:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-💡 *Dica:* Envie uma foto do imóvel que te interessou para eu te dar mais informações antes da visita!
-            """
-        
-        elif any(word in message_lower for word in ['obrigado', 'obrigada', 'valeu', 'thanks']):
-            return """
-😊 *Por nada! Foi um prazer ajudar!*
-
-Sempre que precisar de análise de imóveis, estarei aqui!
-
-📞 *Nossos contatos:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-*Até a próxima!* 🏠✨
-            """
-        
-        # Resposta padrão
-        else:
-            return """
-🤖 *Não entendi bem sua mensagem.*
-
-Posso te ajudar com:
-• 📸 Analisar fotos de imóveis
-• 🔍 Verificar disponibilidade
-• 📞 Encontrar contatos
-• 💰 Informações sobre preços
-
-*Envie uma foto de um imóvel ou digite "ajuda" para ver todos os comandos.*
-
-📞 *Ou fale direto conosco:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-            """
-    
     def _get_error_response(self) -> str:
-        """Resposta padrão para erros"""
-        return """
-😅 *Ops! Algo deu errado.*
+        return "😅 *Ops! Algo deu errado.*\n\nTente novamente ou entre em contato diretamente:\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
 
-Tente novamente ou entre em contato diretamente:
-
-📞 *Nossos especialistas:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-*Estamos aqui para ajudar!* 🏠
-        """
-    
     def _get_analysis_error_response(self) -> str:
-        """Resposta específica para erros de análise"""
-        return """
-🔧 *Sistema de análise temporariamente indisponível*
+        return "🔧 *Sistema de análise temporariamente indisponível*\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
 
-📞 *Nossos especialistas analisarão sua imagem pessoalmente:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-*Envie a imagem diretamente para eles via WhatsApp!*
-        """
-    
     def get_user_stats(self, user_id: str) -> Dict:
-        """Retorna estatísticas do usuário"""
         if user_id not in self.conversation_history:
             return {'messages': 0, 'images_analyzed': 0}
-        
         history = self.conversation_history[user_id]
         return {
             'messages': len(history),
@@ -668,5 +133,4 @@ Tente novamente ou entre em contato diretamente:
             'last_interaction': history[-1]['timestamp'] if history else None
         }
 
-# Instância global do chatbot
 property_chatbot = PropertyChatbot()

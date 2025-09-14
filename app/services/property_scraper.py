@@ -1,6 +1,7 @@
 """
 Sistema de Extração Inteligente de Imóveis
-Extrai dados de propriedades do site Allega Imóveis para treinar a IA
+Executa o scraper a cada 30 minutos, compara imóveis do site com Firebase,
+adiciona, remove ou atualiza imóveis conforme necessário.
 """
 
 import aiohttp
@@ -9,11 +10,12 @@ from bs4 import BeautifulSoup
 import re
 from typing import List, Dict, Any, Optional
 import logging
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 import json
 from datetime import datetime
 
-# Configuração de logging
+from app.services.firebase_service import FirebaseService
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -345,6 +347,51 @@ class AllegaPropertyScraper:
         return knowledge_base
 
 
+async def monitor_scraper(interval_minutes: int = 30, max_properties: int = 100):
+    """Executa o scraper periodicamente e sincroniza com Firebase."""
+    scraper = AllegaPropertyScraper()
+    firebase = FirebaseService()
+    interval = interval_minutes * 60  # segundos
+
+    while True:
+        logger.info(f"[{datetime.now()}] Iniciando verificação de imóveis...")
+        # Extrai imóveis do site
+        scraped_properties = await scraper.scrape_all_properties(max_per_type=max_properties // 4)
+        scraped_dict = {p['reference']: p for p in scraped_properties if p.get('reference')}
+
+        # Busca imóveis do Firebase
+        firebase_properties = await firebase.get_property_data()
+        firebase_dict = {p['reference']: p for p in firebase_properties if p.get('reference')}
+
+        # Detecta imóveis novos
+        new_refs = set(scraped_dict.keys()) - set(firebase_dict.keys())
+        new_properties = [scraped_dict[ref] for ref in new_refs]
+
+        # Detecta imóveis removidos
+        removed_refs = set(firebase_dict.keys()) - set(scraped_dict.keys())
+        removed_properties = [firebase_dict[ref] for ref in removed_refs]
+
+        # Detecta imóveis atualizados
+        updated_properties = []
+        for ref in set(scraped_dict.keys()) & set(firebase_dict.keys()):
+            if scraped_dict[ref] != firebase_dict[ref]:
+                updated_properties.append(scraped_dict[ref])
+
+        # Atualiza Firebase
+        if new_properties:
+            logger.info(f"Adicionando {len(new_properties)} novos imóveis ao Firebase")
+            await firebase.add_properties(new_properties)
+        if removed_properties:
+            logger.info(f"Removendo {len(removed_properties)} imóveis do Firebase")
+            await firebase.remove_properties([p['reference'] for p in removed_properties])
+        if updated_properties:
+            logger.info(f"Atualizando {len(updated_properties)} imóveis no Firebase")
+            await firebase.update_properties(updated_properties)
+
+        logger.info("Verificação concluída. Aguardando próxima execução...")
+        await asyncio.sleep(interval)
+
+
 # Função principal para uso externo
 async def scrape_allega_properties(max_properties: int = 100) -> Dict[str, Any]:
     """Função principal para extrair imóveis da Allega"""
@@ -375,18 +422,5 @@ async def scrape_allega_properties(max_properties: int = 100) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    # Teste do scraper
-    async def main():
-        result = await scrape_allega_properties(max_properties=50)
-        print(f"Extraídos {len(result.get('properties', []))} imóveis")
-        
-        # Mostrar estatísticas
-        kb = result.get('knowledge_base', {})
-        if kb:
-            stats = kb.get('statistics', {})
-            print(f"\nEstatísticas:")
-            print(f"- Total: {stats.get('total_properties', 0)} imóveis")
-            print(f"- Tipos: {list(stats.get('by_type', {}).keys())}")
-            print(f"- Cidades: {list(stats.get('by_city', {}).keys())}")
-    
-    asyncio.run(main())
+    # Executa o monitoramento contínuo
+    asyncio.run(monitor_scraper(interval_minutes=30, max_properties=100))

@@ -34,10 +34,9 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          # Opcional: force rebuild para testar
-          # no-cache: true
           build-args: |
             BUILD_VERSION=${{ github.sha }}
+            OLLAMA_MODELS=llama3.1,llama3.2-vision
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -69,11 +68,13 @@ jobs:
               "WHATSAPP_WEBHOOK_VERIFY_TOKEN=${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}" \
               "WHATSAPP_ACCESS_TOKEN=${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
               "WHATSAPP_PHONE_NUMBER_ID=${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}" \
-              "ABACUS_API_KEY=${{ secrets.ABACUS_API_KEY }}" \
               "DATABASE_URL=${{ secrets.DATABASE_URL }}" \
               "SECRET_KEY=${{ secrets.SECRET_KEY }}" \
               "FIREBASE_CREDENTIALS=secretref:firebase-credentials" \
-              "AI_PROVIDER=abacus" \
+              "AI_PROVIDER=ollama" \
+              "OLLAMA_MODELS=llama3.1,llama3.2-vision" \
+              "LLAMA_TEXT_MODEL=llama3.1" \
+              "LLAMA_VISION_MODEL=llama3.2-vision" \
               "ENVIRONMENT=production" \
               "HOST=0.0.0.0" \
               "PORT=8000"
@@ -82,10 +83,6 @@ jobs:
             --name alloha-backend \
             --resource-group rg-alloha-prod \
             --mode single
-
-          # Se estiver em modo multiple, defina o tráfego 100% para a nova revisão:
-          # az containerapp revision list --name alloha-backend --resource-group rg-alloha-prod -o table
-          # az containerapp revision set-traffic --name alloha-backend --resource-group rg-alloha-prod --revision alloha-backend--${GITHUB_SHA_SHORT} --weight 100
 
       - name: ✅ Deployment Status
         run: |

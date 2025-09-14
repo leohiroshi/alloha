@@ -7,7 +7,7 @@ AI-powered real estate WhatsApp bot built with FastAPI and deployed on Azure Con
 ## 🚀 Features
 
 - ✅ WhatsApp Business API integration
-- ✅ AI-powered responses using Abacus.AI
+- ✅ AI-powered responses using LLaMA 3.1
 - ✅ PostgreSQL database for conversation history
 - ✅ Azure Container Apps deployment
 - ✅ Custom domain with SSL (alloha.app)
@@ -16,7 +16,7 @@ AI-powered real estate WhatsApp bot built with FastAPI and deployed on Azure Con
 ## 🛠️ Tech Stack
 
 - **Backend**: FastAPI (Python 3.11)
-- **AI Provider**: Abacus.AI
+- **AI Provider**: LLaMA 3.1
 - **Database**: PostgreSQL
 - **Messaging**: WhatsApp Business API
 - **Deployment**: Azure Container Apps
@@ -47,7 +47,6 @@ Required secrets in GitHub:
 - `WHATSAPP_ACCESS_TOKEN`
 - `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
 - `WHATSAPP_PHONE_NUMBER_ID`
-- `ABACUS_API_KEY`
 - `DATABASE_URL`
 - `SECRET_KEY`
 
