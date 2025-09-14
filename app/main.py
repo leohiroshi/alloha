@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
+from app.services.property_scraper import monitor_scraper
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -519,6 +520,26 @@ async def get_system_status():
     except Exception as e:
         logger.error(f"Error getting system status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/run-property-scraper")
+async def run_property_scraper():
+    """
+    Executa o monitor do scraper manualmente (uma vez).
+    """
+    try:
+        # Executa uma rodada do monitor (não entra em loop)
+        await monitor_scraper(interval_minutes=0.01, max_properties=100)
+        return {
+            "status": "success",
+            "message": "Scraper executado manualmente.",
+            "timestamp": str(datetime.now())
+        }
+    except Exception as e:
+        logger.error(f"Erro ao executar o scraper manualmente: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 if __name__ == "__main__":
     import uvicorn

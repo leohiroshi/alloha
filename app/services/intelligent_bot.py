@@ -33,7 +33,7 @@ class IntelligentRealEstateBot:
             'enable_image_analysis': True,
             'max_properties_per_response': 3
         }
-        logger.info("🤖 Bot de Inteligência Imobiliária com LLaMA 3.1 iniciado")
+        logger.info("Bot de Inteligência Imobiliária com LLaMA 3.1 iniciado")
 
     async def process_message(self, message: str, user_phone: str) -> str:
         """Processa mensagem do usuário com LLaMA 3.1"""
