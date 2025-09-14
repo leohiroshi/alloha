@@ -47,103 +47,237 @@ class AllegaPropertyScraper:
         self.transaction_types = ['venda', 'locacao', 'lancamento']
     
     async def extract_property_details(self, property_url: str, session: aiohttp.ClientSession) -> Optional[Dict[str, Any]]:
-        """Extrai detalhes de um imóvel específico"""
+        """Extrai detalhes de um imóvel específico, garantindo todos os campos principais"""
         try:
             async with session.get(property_url, headers=self.headers) as response:
                 if response.status != 200:
                     logger.warning(f"Erro ao acessar {property_url}: Status {response.status}")
                     return None
-                
+
                 html = await response.text()
                 soup = BeautifulSoup(html, 'html.parser')
-                
+
+                # Padronização dos campos principais
                 property_data = {
-                    'url': property_url,
+                    'reference': '',  # Referência
+                    'title': '',      # Título
+                    'description': '',# Descrição detalhada
+                    'address': '',    # Endereço
+                    'neighborhood': '',# Bairro
+                    'city': '',       # Município
+                    'uf': '',         # UF
+                    'immediations': '',# Imediações
+                    'area_private': '',# Área privativa
+                    'area_terreno': '',# Área terreno
+                    'measures': '',   # Medidas
+                    'topography': '', # Topografia
+                    'face_property': '',# Face do imóvel
+                    'face_apartment': '',# Face do apartamento
+                    'testada': '',    # Testada
+                    'usage_type': '', # Tipo de uso
+                    'bedrooms': 0,    # Dormitórios
+                    'suites': 0,      # Suítes
+                    'bathrooms': 0,   # Banheiros
+                    'living_rooms': 0,# Salas
+                    'parking_spaces': 0,# Vagas de Garagens
+                    'conservation_state': '',# Estado de conservação
+                    'year_built': '', # Ano de construção
+                    'occupation': '', # Ocupação
+                    'rent_gross': '', # Aluguel Bruto
+                    'bonus': '',      # Bonificação
+                    'rent_net': '',   # Aluguel Líquido
+                    'iptu': '',       # IPTU
+                    'iptu_period': '',# IPTU período
+                    'composition': [],# Composição (lista de cômodos e diferenciais)
+                    'features': [],   # Diferenciais
+                    'images': [],     # Imagens
+                    'contact_info': {},# Contato
                     'scraped_at': datetime.now().isoformat(),
-                    'title': '',
-                    'price': '',
-                    'bedrooms': 0,
-                    'bathrooms': 0,
-                    'parking_spaces': 0,
-                    'area_private': '',
-                    'area_total': '',
-                    'neighborhood': '',
-                    'city': '',
-                    'description': '',
-                    'features': [],
-                    'images': [],
-                    'contact_info': {},
-                    'reference': '',
+                    'url': property_url,
+                    'transaction_type': 'venda',
                     'type': '',
-                    'transaction_type': 'venda'
                 }
-                
-                # Extrair título
+
+                # Título
                 title_elem = soup.find('h1') or soup.find('title')
                 if title_elem:
                     property_data['title'] = title_elem.get_text(strip=True)
-                
-                # Extrair preço
-                price_patterns = [
-                    r'R\$\s*[\d.,]+',
-                    r'[\d.,]+\s*reais?',
-                    r'valor.*?[\d.,]+'
-                ]
-                
-                for pattern in price_patterns:
-                    price_match = re.search(pattern, html, re.IGNORECASE)
-                    if price_match:
-                        property_data['price'] = price_match.group()
-                        break
-                
-                # Extrair características (quartos, banheiros, vagas)
-                characteristics_text = soup.get_text()
-                
-                # Quartos
-                bedroom_match = re.search(r'(\d+)\s*(?:dorm|quarto|dormitório)', characteristics_text, re.IGNORECASE)
-                if bedroom_match:
-                    property_data['bedrooms'] = int(bedroom_match.group(1))
-                
+
+                # Referência
+                ref_match = re.search(r'Refer[êe]ncia[:\s]*([A-Z0-9-]+)', html, re.IGNORECASE)
+                if ref_match:
+                    property_data['reference'] = ref_match.group(1)
+
+                # Endereço
+                address_match = re.search(r'Endere[çc]o[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if address_match:
+                    property_data['address'] = address_match.group(1).strip()
+
+                # Bairro
+                bairro_match = re.search(r'Bairro[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if bairro_match:
+                    property_data['neighborhood'] = bairro_match.group(1).strip()
+
+                # Município
+                municipio_match = re.search(r'Município[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if municipio_match:
+                    property_data['city'] = municipio_match.group(1).strip()
+
+                # UF
+                uf_match = re.search(r'UF[:\s]*([A-Z]{2})', html, re.IGNORECASE)
+                if uf_match:
+                    property_data['uf'] = uf_match.group(1).strip()
+
+                # Imediações
+                imedia_match = re.search(r'Imedia[çc][õo]es?[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if imedia_match:
+                    property_data['immediations'] = imedia_match.group(1).strip()
+
+                # Área privativa
+                area_priv_match = re.search(r'Área privativa[:\s]*([\d.,]+)\s*m²', html, re.IGNORECASE)
+                if area_priv_match:
+                    property_data['area_private'] = area_priv_match.group(1).replace(',', '.') + ' m²'
+
+                # Área terreno
+                area_terreno_match = re.search(r'Área terreno[:\s]*([\d.,]+)\s*m²', html, re.IGNORECASE)
+                if area_terreno_match:
+                    property_data['area_terreno'] = area_terreno_match.group(1).replace(',', '.') + ' m²'
+
+                # Medidas
+                medidas_match = re.search(r'Medidas[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if medidas_match:
+                    property_data['measures'] = medidas_match.group(1).strip()
+
+                # Topografia
+                topo_match = re.search(r'Topografia[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if topo_match:
+                    property_data['topography'] = topo_match.group(1).strip()
+
+                # Face do imóvel
+                face_imovel_match = re.search(r'Face do imóvel[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if face_imovel_match:
+                    property_data['face_property'] = face_imovel_match.group(1).strip()
+
+                # Face do apartamento
+                face_ap_match = re.search(r'Face do apartamento[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if face_ap_match:
+                    property_data['face_apartment'] = face_ap_match.group(1).strip()
+
+                # Testada
+                testada_match = re.search(r'Testada[:\s]*([\d.,]+)', html, re.IGNORECASE)
+                if testada_match:
+                    property_data['testada'] = testada_match.group(1).strip()
+
+                # Tipo de uso
+                tipo_uso_match = re.search(r'Tipo de uso[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if tipo_uso_match:
+                    property_data['usage_type'] = tipo_uso_match.group(1).strip()
+
+                # Dormitórios
+                dorm_match = re.search(r'Dormit[óo]rios?[:\s]*([\d]+)', html, re.IGNORECASE)
+                if dorm_match:
+                    property_data['bedrooms'] = int(dorm_match.group(1))
+
+                # Suítes
+                suite_match = re.search(r'Su[íi]tes?[:\s]*([\d]+)', html, re.IGNORECASE)
+                if suite_match:
+                    property_data['suites'] = int(suite_match.group(1))
+
                 # Banheiros
-                bathroom_match = re.search(r'(\d+)\s*(?:banh|banheiro)', characteristics_text, re.IGNORECASE)
-                if bathroom_match:
-                    property_data['bathrooms'] = int(bathroom_match.group(1))
-                
-                # Vagas
-                parking_match = re.search(r'(\d+)\s*(?:vaga|garagem)', characteristics_text, re.IGNORECASE)
-                if parking_match:
-                    property_data['parking_spaces'] = int(parking_match.group(1))
-                
-                # Área
-                area_match = re.search(r'(\d+(?:,\d+)?)\s*m²', characteristics_text)
-                if area_match:
-                    property_data['area_total'] = area_match.group()
-                
-                # Bairro e cidade
-                location_match = re.search(r'(?:bairro|região)?\s*([^,]+),?\s*(curitiba|itapema)', characteristics_text, re.IGNORECASE)
-                if location_match:
-                    property_data['neighborhood'] = location_match.group(1).strip()
-                    property_data['city'] = location_match.group(2).strip()
-                
-                # Descrição
-                description_elem = soup.find('div', class_=re.compile(r'descri.*|detail.*|info.*'))
-                if description_elem:
-                    property_data['description'] = description_elem.get_text(strip=True)[:500]
-                
+                banh_match = re.search(r'Banheiros?[:\s]*([\d]+)', html, re.IGNORECASE)
+                if banh_match:
+                    property_data['bathrooms'] = int(banh_match.group(1))
+
+                # Salas
+                sala_match = re.search(r'Salas?[:\s]*([\d]+)', html, re.IGNORECASE)
+                if sala_match:
+                    property_data['living_rooms'] = int(sala_match.group(1))
+
+                # Vagas de Garagens
+                vagas_match = re.search(r'Vagas de Garagens?[:\s]*([\d]+)', html, re.IGNORECASE)
+                if vagas_match:
+                    property_data['parking_spaces'] = int(vagas_match.group(1))
+
+                # Estado de conservação
+                estado_match = re.search(r'Estado de conservação[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if estado_match:
+                    property_data['conservation_state'] = estado_match.group(1).strip()
+
+                # Ano de construção
+                ano_match = re.search(r'Ano de construção[:\s]*([\d]{4})', html, re.IGNORECASE)
+                if ano_match:
+                    property_data['year_built'] = ano_match.group(1)
+
+                # Ocupação
+                ocupacao_match = re.search(r'Ocupação[:\s]*([^\n\r]+)', html, re.IGNORECASE)
+                if ocupacao_match:
+                    property_data['occupation'] = ocupacao_match.group(1).strip()
+
+                # Aluguel Bruto
+                aluguel_bruto_match = re.search(r'Aluguel Bruto[:\s]*R?\$?\s*([\d.,]+)', html, re.IGNORECASE)
+                if aluguel_bruto_match:
+                    property_data['rent_gross'] = aluguel_bruto_match.group(1)
+
+                # Bonificação
+                bonificacao_match = re.search(r'Bonifica[çc][ãa]o[:\s]*R?\$?\s*([\d.,]+)', html, re.IGNORECASE)
+                if bonificacao_match:
+                    property_data['bonus'] = bonificacao_match.group(1)
+
+                # Aluguel Líquido
+                aluguel_liquido_match = re.search(r'Aluguel Líquido[:\s]*R?\$?\s*([\d.,]+)', html, re.IGNORECASE)
+                if aluguel_liquido_match:
+                    property_data['rent_net'] = aluguel_liquido_match.group(1)
+
+                # IPTU
+                iptu_match = re.search(r'IPTU[:\s]*R?\$?\s*([\d.,]+)', html, re.IGNORECASE)
+                if iptu_match:
+                    property_data['iptu'] = iptu_match.group(1)
+
+                # IPTU período
+                iptu_period_match = re.search(r'IPTU.*?(mensal|anual)', html, re.IGNORECASE)
+                if iptu_period_match:
+                    property_data['iptu_period'] = iptu_period_match.group(1)
+
+                # Descrição detalhada
+                desc_elem = soup.find('div', class_=re.compile(r'descri.*|detail.*|info.*'))
+                if desc_elem:
+                    property_data['description'] = desc_elem.get_text(strip=True)[:1000]
+                else:
+                    # fallback: pega o primeiro parágrafo relevante
+                    p_elem = soup.find('p')
+                    if p_elem:
+                        property_data['description'] = p_elem.get_text(strip=True)[:1000]
+
+                # Composição e diferenciais (busca por listas ou marcadores)
+                composition = []
+                features = []
+                for ul in soup.find_all('ul'):
+                    for li in ul.find_all('li'):
+                        text = li.get_text(strip=True)
+                        if text:
+                            composition.append(text)
+                # Adiciona diferenciais conhecidos
+                diff_keywords = [
+                    'Amplo quintal', 'Closet Sr. e Sra.', 'Suíte Master com varanda', 'Ar condicionado',
+                    'Hidromassagem', 'Lareira', 'Piscina', 'Churrasqueira a carvão', 'Despensa',
+                    'Lavanderia', 'Jardim', 'Área de lazer', 'Mobiliado', 'Próximo ao metrô'
+                ]
+                for kw in diff_keywords:
+                    if kw.lower() in html.lower():
+                        features.append(kw)
+                property_data['composition'] = composition
+                property_data['features'] = list(set(features + composition))
+
                 # Imagens
                 img_elements = soup.find_all('img')
                 for img in img_elements:
                     img_src = img.get('src') or img.get('data-src')
                     if img_src and ('imovel' in img_src or 'property' in img_src or 'foto' in img_src):
                         full_url = urljoin(self.base_url, img_src)
-                        property_data['images'].append(full_url)
-                
-                # Referência
-                ref_match = re.search(r'ref(?:erência)?[:\s]*([A-Z0-9-]+)', html, re.IGNORECASE)
-                if ref_match:
-                    property_data['reference'] = ref_match.group(1)
-                
-                # Contato (números da Allega)
+                        if full_url not in property_data['images']:
+                            property_data['images'].append(full_url)
+
+                # Contato (dados fixos da Allega)
                 property_data['contact_info'] = {
                     'phone_sales': '(41) 99214-6670',
                     'phone_rental': '(41) 99223-0874',
@@ -151,10 +285,10 @@ class AllegaPropertyScraper:
                     'email': 'contato@allegaimoveis.com',
                     'address': 'Rua Gastão Câmara, 135 - Bigorrilho, Curitiba - PR'
                 }
-                
-                logger.info(f"Imóvel extraído: {property_data['title'][:50]}...")
+
+                logger.info(f"Imóvel extraído: {property_data['title'][:50]}... Referência: {property_data['reference']}")
                 return property_data
-                
+
         except Exception as e:
             logger.error(f"Erro ao extrair detalhes do imóvel {property_url}: {str(e)}")
             return None
