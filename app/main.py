@@ -226,16 +226,6 @@ async def process_whatsapp_message(webhook_data):
         # Processar mensagem de texto
         message_text = message.get("text", {}).get("body", "")
         
-        # Verificar comandos especiais primeiro
-        special_response = await intelligent_bot.handle_special_commands(message_text, from_number)
-        
-        if special_response:
-            # Enviar resposta de comando especial
-            success = await whatsapp_service.send_message(from_number, special_response)
-            if success:
-                logger.info(f"✅ Special command response sent to {from_number}")
-            return
-        
         # Processar com sistema inteligente
         ai_response = await intelligent_bot.process_message(message_text, from_number)
         
