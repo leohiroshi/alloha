@@ -13,6 +13,9 @@ import aiohttp
 import socket
 import random
 import base64
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

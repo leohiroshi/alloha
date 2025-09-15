@@ -10,6 +10,9 @@ from datetime import datetime
 import aiohttp
 import base64
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger("IntelligentRealEstateBot")
 logger.setLevel(logging.INFO)

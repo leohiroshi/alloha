@@ -11,6 +11,9 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import re
 import aiohttp
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from .firebase_service import FirebaseService
 
