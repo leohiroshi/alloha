@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class AIService:
     def __init__(self):
         self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
-        self.text_model = os.getenv("LLAMA_TEXT_MODEL", "llama3.1")
+        self.text_model = os.getenv("LLAMA_TEXT_MODEL", "llama3.2:1b")
         self.vision_model = os.getenv("LLAMA_VISION_MODEL", "llama3.2-vision")
         self.conversation_context = {}
         self._property_intelligence = None

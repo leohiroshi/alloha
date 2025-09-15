@@ -5,7 +5,7 @@ FROM ollama/ollama:latest
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Define argumentos de build
-ARG OLLAMA_MODELS="llama3.1,llama3.2-vision"
+ARG OLLAMA_MODELS="llama3.2:1b,llama3.2-vision"
 
 # Cria diretório para modelos
 RUN mkdir -p /root/.ollama

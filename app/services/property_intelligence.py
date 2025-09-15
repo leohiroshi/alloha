@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class PropertyIntelligenceService:
     """Serviço que combina LLaMA 3.1 com dados imobiliários"""
 
-    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.1"):
+    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.2:1b"):
         self.firebase_service = FirebaseService()
         self.ollama_url = ollama_url
         self.model = model

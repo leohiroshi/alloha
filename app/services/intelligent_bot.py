@@ -21,9 +21,9 @@ if not logger.hasHandlers():
     logger.addHandler(handler)
 
 class IntelligentRealEstateBot:
-    """Bot inteligente especializado em imóveis usando LLaMA 3.1"""
+    """Bot inteligente especializado em imóveis usando LLaMA 3.2"""
 
-    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.1"):
+    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.2:1b"):
         self.ollama_url = ollama_url
         self.model = model
         self.bot_config = {
