@@ -8,7 +8,6 @@ on:
 env:
   REGISTRY: docker.io
   IMAGE_NAME: leohiroshi/alloha-whatsapp-bot
-  OLLAMA_IMAGE_NAME: leohiroshi/ollama-server
 
 jobs:
   build-and-deploy:
@@ -26,7 +25,7 @@ jobs:
           username: leohiroshi
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: 🏗️ Build and push Docker image (tag by SHA)
+      - name: 🏗️ Build and push Docker image
         id: build
         uses: docker/build-push-action@v5
         with:
@@ -35,23 +34,9 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
           build-args: |
             BUILD_VERSION=${{ github.sha }}
-            OLLAMA_MODELS=llama3.2:1b,llama3.2-vision
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: 🦙 Build and push Ollama Docker image
-        id: build-ollama
-        uses: docker/build-push-action@v5
-        with:
-          context: ./ollama
-          file: ./ollama/Dockerfile
-          push: true
-          tags: |
-            ${{ env.OLLAMA_IMAGE_NAME }}:${{ github.sha }}
-          build-args: |
-            OLLAMA_MODELS=llama3.2:1b,llama3.2-vision
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -60,7 +45,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: 📝 Create multi-container YAML
+      - name: 📝 Create container configuration
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
@@ -80,22 +65,10 @@ jobs:
                       value: "${{ secrets.WHATSAPP_ACCESS_TOKEN }}"
                     - name: WHATSAPP_PHONE_NUMBER_ID
                       value: "${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}"
-                    - name: DATABASE_URL
-                      value: "${{ secrets.DATABASE_URL }}"
-                    - name: SECRET_KEY
-                      value: "${{ secrets.SECRET_KEY }}"
                     - name: FIREBASE_CREDENTIALS
                       secretRef: firebase-credentials
-                    - name: AI_PROVIDER
-                      value: "groq"
-                    - name: OLLAMA_BASE_URL
-                      value: "http://localhost:11434"
-                    - name: OLLAMA_MODELS
-                      value: "llama3.2:1b,llama3.2-vision"
-                    - name: LLAMA_TEXT_MODEL
-                      value: "llama3.2:1b"
-                    - name: LLAMA_VISION_MODEL
-                      value: "llama3.2-vision"
+                    - name: GROQ_API_KEY
+                      secretRef: groq-api-key
                     - name: ENVIRONMENT
                       value: "production"
                     - name: HOST
@@ -105,35 +78,27 @@ jobs:
                   resources:
                     cpu: 1.0
                     memory: 2Gi
-                - name: ollama-server
-                  image: ${{ env.OLLAMA_IMAGE_NAME }}:${IMAGE_TAG}
-                  imagePullPolicy: Always
-                  env:
-                    - name: OLLAMA_HOST
-                      value: "0.0.0.0"
-                    - name: OLLAMA_MODELS
-                      value: "llama3.2:1b,llama3.2-vision"
-                  resources:
-                    cpu: 2.0
-                    memory: 4Gi
           EOF
 
-      - name: 🚀 Deploy to Container Apps (multi-container)
+      - name: 🚀 Deploy to Container Apps
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Atualiza secret Firebase
+          # Atualizar secrets
           az containerapp secret set \
             --name alloha-backend \
             --resource-group rg-alloha-prod \
-            --secrets firebase-credentials='${{ secrets.FIREBASE_CREDENTIALS }}'
+            --secrets \
+              firebase-credentials='${{ secrets.FIREBASE_CREDENTIALS }}' \
+              groq-api-key='${{ secrets.GROQ_API_KEY }}'
 
-          # Deploy multi-container usando YAML
+          # Deploy usando YAML
           az containerapp update \
             --name alloha-backend \
             --resource-group rg-alloha-prod \
             --yaml containerapp-config.yaml
 
+          # Configurar modo single revision
           az containerapp revision set-mode \
             --name alloha-backend \
             --resource-group rg-alloha-prod \
@@ -141,10 +106,10 @@ jobs:
 
       - name: ✅ Deployment Status
         run: |
-          echo "🎉 Multi-container deployment completed!"
-          echo "Backend container:"
+          echo "🎉 Alloha Bot deployment completed!"
+          echo "Container image:"
           az containerapp show --name alloha-backend --resource-group rg-alloha-prod --query "properties.template.containers[0].image"
-          echo "Ollama container:"
-          az containerapp show --name alloha-backend --resource-group rg-alloha-prod --query "properties.template.containers[1].image"
-          echo "All revisions:"
-          az containerapp revision list --name alloha-backend --resource-group rg-alloha-prod -o table
+          echo "Application URL:"
+          az containerapp show --name alloha-backend --resource-group rg-alloha-prod --query "properties.configuration.ingress.fqdn"
+          echo "Latest revision:"
+          az containerapp revision list --name alloha-backend --resource-group rg-alloha-prod --query "[0].name"

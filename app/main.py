@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
+from app.services.ai_service import ai_service
+from app.services.property_intelligence import property_intelligence
 from app.services.property_scraper import monitor_scraper
 
 # Configurar logging
@@ -70,6 +72,9 @@ async def health():
         except:
             firebase_status = "disconnected"
         
+        # Verificar dados de propriedades
+        property_data_loaded = bool(property_intelligence.property_cache)
+        
         return {
             "status": "healthy", 
             "service": "allega-intelligent-bot",
@@ -78,7 +83,8 @@ async def health():
             "access_token_configured": bool(ACCESS_TOKEN),
             "phone_number_configured": bool(PHONE_NUMBER_ID),
             "firebase_status": firebase_status,
-            "ai_service_available": bool(intelligent_bot.ai_service.api_key),
+            "property_data_loaded": property_data_loaded,
+            "ai_service_available": bool(ai_service.api_key),
             "features": {
                 "property_search": True,
                 "market_insights": True,
