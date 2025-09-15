@@ -85,7 +85,7 @@ async def health():
             "phone_number_configured": bool(PHONE_NUMBER_ID),
             "firebase_status": firebase_status,
             "property_data_loaded": property_data_loaded,
-            "ai_service_available": bool(ai_service.api_key),
+            "ai_service_available": bool(ai_service.groq_api_key),
             "features": {
                 "property_search": True,
                 "market_insights": True,
