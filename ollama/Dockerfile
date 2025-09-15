@@ -27,5 +27,6 @@ ENV OLLAMA_MODELS=${OLLAMA_MODELS}
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:11434/api/tags || exit 1
 
-# Comando para iniciar - CORRIGIDO: usar bash explicitamente
-CMD ["bash", "/start-ollama.sh"]
+# CORREÇÃO: Sobrescrever o ENTRYPOINT e usar CMD
+ENTRYPOINT []
+CMD ["/start-ollama.sh"]
