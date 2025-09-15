@@ -2,23 +2,23 @@ import aiohttp
 import logging
 import os
 import re
+import base64
 from typing import Optional, Dict, Any
 from datetime import datetime
-from llama_index import GPTVectorStoreIndex
 
 logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self):
-        self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
-        self.text_model = os.getenv("LLAMA_TEXT_MODEL", "llama3.2:1b")
-        self.vision_model = os.getenv("LLAMA_VISION_MODEL", "llama3.2-vision")
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.text_model = "llama3-8b-8192"  # Modelo de texto do Groq
+        self.vision_model = "llama-3.2-11b-vision-preview"  # Modelo de visão do Groq
         self.conversation_context = {}
         self._property_intelligence = None
 
         self.property_knowledge = {
             "tipos": ["apartamento", "casa", "kitnet", "studio", "cobertura", "terreno", "comercial"],
-            "regioes": ["centro", "zona sul", "zona norte", "zona oeste", "zona leste"],
+            "regioes": ["centro", "zona sul", "zona norte", "zona oeste", "zona leste", "bigorrilho", "batel", "cabral", "champagnat", "água verde", "portão", "santa felicidade"],
             "faixas_preco": {
                 "baixo": "até R$ 200.000",
                 "medio": "R$ 200.000 - R$ 500.000", 
@@ -38,21 +38,12 @@ class AIService:
                 self._property_intelligence = None
         return self._property_intelligence
 
-    @property
-    def property_index(self) -> Optional[GPTVectorStoreIndex]:
-        """Retorna o índice de busca inteligente dos imóveis, se existir."""
-        try:
-            index = GPTVectorStoreIndex.load_from_disk("property_index.json")
-            return index
-        except Exception as e:
-            logger.error(f"Erro ao carregar o índice de imóveis: {str(e)}")
-            return None
-
     async def generate_response(self, message: str, user_phone: str, image_bytes: bytes = None) -> str:
         try:
             intent = await self._analyze_intent(message)
             context = await self._get_conversation_context_from_db(user_phone)
             self._update_conversation_context(user_phone, message, intent)
+            
             if image_bytes:
                 return await self._handle_image_analysis(message, image_bytes)
             else:
@@ -92,21 +83,26 @@ class AIService:
             "confidence": 0.0,
             "entities": {}
         }
+        
         if any(word in message_lower for word in ["oi", "olá", "hello", "hi", "bom dia", "boa tarde", "boa noite"]):
             intent["type"] = "greeting"
             intent["confidence"] = 0.9
         elif any(word in message_lower for word in ["apartamento", "casa", "imóvel", "comprar", "alugar"]):
             intent["type"] = "property_search"
             intent["confidence"] = 0.8
+            
             for tipo in self.property_knowledge["tipos"]:
                 if tipo in message_lower:
                     intent["entities"]["property_type"] = tipo
+            
             for regiao in self.property_knowledge["regioes"]:
                 if regiao in message_lower:
                     intent["entities"]["location"] = regiao
+            
             numbers = re.findall(r'\d+', message)
             if numbers:
                 intent["entities"]["numbers"] = numbers
+                
         elif any(word in message_lower for word in ["preço", "valor", "quanto", "custo"]):
             intent["type"] = "price_inquiry"
             intent["confidence"] = 0.8
@@ -116,6 +112,7 @@ class AIService:
         elif any(word in message_lower for word in ["documentos", "financiamento", "fies", "itbi"]):
             intent["type"] = "information"
             intent["confidence"] = 0.7
+            
         return intent
 
     def _get_conversation_context(self, user_phone: str) -> Dict:
@@ -141,6 +138,7 @@ class AIService:
 
     async def _generate_contextual_response(self, message: str, intent: Dict, context: Dict) -> str:
         intent_type = intent["type"]
+        
         if intent_type == "greeting":
             return await self._handle_greeting(context)
         elif intent_type == "property_search":
@@ -156,9 +154,9 @@ class AIService:
 
     async def _handle_greeting(self, context: Dict) -> str:
         if len(context["messages"]) == 1:
-            return """🏠 Olá! Bem-vindo à Alloha! 
+            return """🏠 Olá! Bem-vindo à Allega Imóveis! 
 
-Sou seu assistente especializado em imóveis. Posso ajudar você a:
+Sou a Sofia, sua assistente especializada em imóveis. Posso ajudar você a:
 • Encontrar apartamentos e casas
 • Informações sobre preços
 • Agendar visitas
@@ -168,34 +166,8 @@ O que você procura hoje?"""
         else:
             return "Olá novamente! Como posso ajudá-lo hoje? 😊"
 
-    @property
-    def property_index(self) -> Optional[GPTVectorStoreIndex]:
-        """Retorna o índice de busca inteligente dos imóveis, se existir."""
-        try:
-            index = GPTVectorStoreIndex.load_from_disk("property_index.json")
-            return index
-        except Exception as e:
-            logger.error(f"Erro ao carregar o índice de imóveis: {str(e)}")
-            return None
-
-    def query_property_index(self, query: str) -> Optional[str]:
-        """Consulta o índice inteligente de imóveis usando LlamaIndex."""
-        index = self.property_index
-        if not index:
-            return None
-        try:
-            response = index.query(query)
-            return str(response)
-        except Exception as e:
-            logger.error(f"Erro ao consultar o índice de imóveis: {str(e)}")
-            return None
-
     async def _handle_property_search(self, message: str, intent: Dict, context: Dict) -> str:
         try:
-            # Consulta o índice inteligente primeiro
-            index_response = self.query_property_index(message)
-            if index_response:
-                return f"🔎 *Busca inteligente de imóveis:*\n{index_response}\n\n"
 
             if self.property_intelligence:
                 user_id = context.get('user_phone', 'unknown')
@@ -213,14 +185,17 @@ Informações da Allega Imóveis:
 - Locação: (41) 99223-0874
 - Especialistas em imóveis residenciais e comerciais
 - Atendimento personalizado e consultoria completa"""
+                
                 context_info = ""
                 if entities:
                     context_info = f"Cliente interessado em: {entities}"
+                
                 user_prompt = f"""Cliente busca imóvel: {message}
 Contexto: {context_info}
 
 Responda oferecendo ajuda e pedindo mais detalhes específicos."""
-                response = await self._call_llama(self.text_model, system_prompt, user_prompt)
+                
+                response = await self._call_groq(system_prompt, user_prompt)
                 if response:
                     return response
                 else:
@@ -239,12 +214,14 @@ Responda oferecendo ajuda e pedindo mais detalhes específicos."""
         return response
 
     async def _handle_price_inquiry(self, message: str, intent: Dict, context: Dict) -> str:
-        system_prompt = """Você é um especialista em preços de imóveis da Alloha.
-Forneça informações realistas sobre faixas de preço.
+        system_prompt = """Você é a Sofia, especialista em preços de imóveis da Allega Imóveis.
+Forneça informações realistas sobre faixas de preço em Curitiba e região metropolitana.
 Seja específico e útil. Máximo 300 caracteres."""
-        response = await self._call_llama(self.text_model, system_prompt, f"Cliente pergunta sobre preços: {message}")
+        
+        response = await self._call_groq(system_prompt, f"Cliente pergunta sobre preços: {message}")
         if response:
             return response
+            
         return """💰 Os preços variam conforme localização e características:
 
 • Apartamentos: R$ 150k - R$ 800k+
@@ -263,14 +240,20 @@ Para agilizar o processo, preciso de:
 
 Um corretor entrará em contato em até 2h para confirmar!
 
+📞 Contatos diretos:
+🏠 Vendas: (41) 99214-6670
+🏡 Locação: (41) 99223-0874
+
 Qual imóvel gostaria de visitar?"""
 
     async def _handle_information_request(self, message: str, intent: Dict, context: Dict) -> str:
-        system_prompt = """Você é um consultor imobiliário da Alloha especialista em documentação e financiamento.
-Forneça informações práticas e úteis. Máximo 300 caracteres."""
-        response = await self._call_llama(self.text_model, system_prompt, f"Cliente pergunta: {message}")
+        system_prompt = """Você é a Sofia, consultora imobiliária da Allega Imóveis especialista em documentação e financiamento.
+Forneça informações práticas e úteis sobre o mercado imobiliário. Máximo 300 caracteres."""
+        
+        response = await self._call_groq(system_prompt, f"Cliente pergunta: {message}")
         if response:
             return response
+            
         return """📋 Posso ajudar com informações sobre:
 
 • Documentação necessária
@@ -278,96 +261,192 @@ Forneça informações práticas e úteis. Máximo 300 caracteres."""
 • ITBI e custos extras
 • Processo de compra/venda
 
+📞 Contatos:
+🏠 Vendas: (41) 99214-6670
+🏡 Locação: (41) 99223-0874
+
 Sobre o que você gostaria de saber?"""
 
     async def _handle_general_inquiry(self, message: str, context: Dict) -> str:
-        system_prompt = """Você é o assistente da Alloha Imóveis.
+        system_prompt = """Você é a Sofia, assistente da Allega Imóveis.
 Responda de forma amigável e direcione para serviços imobiliários.
 Máximo 250 caracteres."""
-        response = await self._call_llama(self.text_model, system_prompt, f"Cliente pergunta: {message}")
+        
+        response = await self._call_groq(system_prompt, f"Cliente pergunta: {message}")
         if response:
             return response
+            
         return f"""🤖 Entendi: \"{message}\"
 
-Como especialista em imóveis, posso ajudar com:
+Como Sofia da Allega Imóveis, posso ajudar com:
 • Busca de apartamentos/casas
 • Informações de preços
 • Agendamento de visitas
 • Documentação
 
+📞 Contatos:
+🏠 Vendas: (41) 99214-6670
+🏡 Locação: (41) 99223-0874
+
 Como posso ajudá-lo hoje?"""
 
     async def _handle_image_analysis(self, message: str, image_bytes: bytes) -> str:
         try:
-            import base64
+            if not self.groq_api_key:
+                return "😅 Sistema de análise de imagens temporariamente indisponível."
+            
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            prompt = f"Analise esta imagem de imóvel. Mensagem do usuário: {message}"
+            
+            enhanced_prompt = (
+                f"Analise esta imagem de imóvel. Mensagem do usuário: {message}\n\n"
+                "Como Sofia da Allega Imóveis, identifique:\n"
+                "- Tipo de imóvel (casa, apartamento, terreno)\n"
+                "- Características visíveis (quartos, banheiros, garagem)\n"
+                "- Estado de conservação\n"
+                "- Localização aproximada se possível\n"
+                "- Diferenciais e pontos de destaque\n"
+                "- Valor estimado se conseguir identificar\n\n"
+                "Seja específico e profissional na análise."
+            )
+            
             payload = {
                 "model": self.vision_model,
                 "messages": [{
                     "role": "user",
-                    "content": prompt,
-                    "images": [image_b64]
-                }]
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": enhanced_prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_b64}"
+                            }
+                        }
+                    ]
+                }],
+                "max_tokens": 1000,
+                "temperature": 0.3
             }
+            
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+            
             async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.ollama_url}/api/chat", json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                    text = await resp.text()
-                    logger.info(f"Resposta da análise de imagem: status={resp.status}, body={text[:200]}")
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions", 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=aiohttp.ClientTimeout(total=60)
+                ) as resp:
                     if resp.status == 200:
                         result = await resp.json()
-                        llm_response = result.get("message", {}).get("content", "")
-                        return f"🏠 *Análise do Imóvel Concluída*\n\n{llm_response}\n\n💡 *Análise concluída!*"
+                        llm_response = result["choices"][0]["message"]["content"]
+                        
+                       
+                        response = f"🏠 *Análise do Imóvel Concluída*\n\n{llm_response}\n\n"
+                        
+                    
+                        response += "💡 *Análise concluída pela Sofia da Allega Imóveis!*\n"
+                        response += "📞 *Quer mais informações?*\n"
+                        response += "🏠 Vendas: (41) 99214-6670\n"
+                        response += "🏡 Locação: (41) 99223-0874"
+                        
+                        return response
                     else:
-                        return f"😅 *Tive dificuldade para analisar esta imagem.*\n\nErro: Status {resp.status}: {text}"
+                        error_data = await resp.json() if resp.content_type == 'application/json' else {}
+                        logger.error(f"Groq Vision API error: {resp.status} - {error_data}")
+                        return self._get_image_analysis_fallback()
+                        
         except Exception as e:
-            logger.error(f"Erro ao analisar imagem com LLaMA 3.2 Vision: {e}")
-            return f"Erro ao analisar imagem: {str(e)}"
+            logger.error(f"Erro ao analisar imagem com Groq Vision: {e}")
+            return self._get_image_analysis_fallback()
 
-    async def _call_llama(self, model: str, system_prompt: str, user_prompt: str) -> Optional[str]:
+    def _get_image_analysis_fallback(self) -> str:
+        return """📸 Recebi sua imagem!
+
+😅 Tive dificuldade técnica para analisá-la no momento.
+
+🏠 *Mas posso ajudar de outras formas:*
+• Descreva o imóvel que procura
+• Informe sua localização preferida
+• Conte sobre seu orçamento
+
+📞 *Ou entre em contato direto:*
+🏠 Vendas: (41) 99214-6670
+🏡 Locação: (41) 99223-0874"""
+
+    async def _call_groq(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        """Chama API do Groq para geração de texto"""
+        if not self.groq_api_key:
+            return None
+        
         try:
             payload = {
-                "model": model,
+                "model": self.text_model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ]
+                ],
+                "max_tokens": 500,
+                "temperature": 0.3
             }
+            
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+            
             async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.ollama_url}/api/chat", json=payload, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions", 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        content = data.get("message", {}).get("content", "").strip()
-                        return content[:300] if len(content) > 300 else content
+                        content = data["choices"][0]["message"]["content"].strip()
+                        return content[:400] if len(content) > 400 else content
                     else:
-                        error_text = await response.text()
-                        logger.error(f"Ollama API error: {response.status} - {error_text}")
+                        error_data = await response.json() if response.content_type == 'application/json' else {}
+                        logger.error(f"Groq API error: {response.status} - {error_data}")
                         return None
         except Exception as e:
-            logger.error(f"Error calling Ollama API: {str(e)}")
+            logger.error(f"Error calling Groq API: {str(e)}")
             return None
 
     def is_available(self) -> bool:
-        return True
+        return bool(self.groq_api_key)
 
     async def get_property_suggestions(self, criteria: str, user_phone: str) -> str:
         try:
             context = self._get_conversation_context(user_phone)
-            system_prompt = """Você é um especialista em imóveis da Alloha.
+            system_prompt = """Você é a Sofia, especialista em imóveis da Allega Imóveis.
 Sugira imóveis específicos baseado nos critérios do cliente.
-Inclua tipos, preços estimados e localizações.
+Inclua tipos, preços estimados e localizações em Curitiba.
 Seja específico e útil. Máximo 400 caracteres."""
+            
             user_prompt = f"""Critérios do cliente: {criteria}
 
 Histórico da conversa: {context.get('messages', [])}
 
 Sugira opções de imóveis adequadas."""
-            response = await self._call_llama(self.text_model, system_prompt, user_prompt)
+            
+            response = await self._call_groq(system_prompt, user_prompt)
             if response:
                 return response
+                
             return """🏠 Baseado no que você procura, temos ótimas opções!
 
 Vou conectar você com um de nossos corretores especializados que tem acesso ao nosso portfólio completo.
+
+📞 Contatos:
+🏠 Vendas: (41) 99214-6670
+🏡 Locação: (41) 99223-0874
 
 Quer agendar uma conversa?"""
         except Exception as e:

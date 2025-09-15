@@ -87,7 +87,7 @@ jobs:
                     - name: FIREBASE_CREDENTIALS
                       secretRef: firebase-credentials
                     - name: AI_PROVIDER
-                      value: "ollama"
+                      value: "groq"
                     - name: OLLAMA_BASE_URL
                       value: "http://localhost:11434"
                     - name: OLLAMA_MODELS

@@ -6,6 +6,10 @@ import os
 from datetime import datetime
 from typing import Optional, Dict, List
 import base64
+from dotenv import load_dotenv  # Adicionar esta linha
+
+# Carregar .env explicitamente
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +21,13 @@ class FirebaseService:
     def _initialize_firebase(self):
         """Inicializar Firebase"""
         try:
+            # DEBUG: Verificar se variável existe
+            firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
+            
             # Verificar se já foi inicializado
             if firebase_admin._apps:
                 self.db = firestore.client()
                 return
-            
-            # Tentar carregar credenciais do ambiente
-            firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
             
             if firebase_credentials:
                 # Se credenciais estão em base64 (para GitHub Actions)
@@ -38,23 +42,19 @@ class FirebaseService:
                     firebase_admin.initialize_app(cred)
                     self.db = firestore.client()
                     logger.info("✅ Firebase inicializado com credenciais do ambiente")
+                    print("✅ Firebase inicializado com credenciais do ambiente")
                 except Exception as e:
                     logger.error(f"❌ Erro ao carregar credenciais: {str(e)}")
+                    print(f"❌ Erro ao carregar credenciais: {str(e)}")
                     self.db = None
             else:
-                # Tentar carregar arquivo local para desenvolvimento
-                cred_file = "firebase-credentials.json"
-                if os.path.exists(cred_file):
-                    cred = credentials.Certificate(cred_file)
-                    firebase_admin.initialize_app(cred)
-                    self.db = firestore.client()
-                    logger.info("✅ Firebase inicializado com arquivo local")
-                else:
-                    logger.warning("⚠️ Firebase não configurado - usando modo offline")
-                    self.db = None
+                logger.warning("⚠️ Firebase não configurado - usando modo offline")
+                print("⚠️ Firebase não configurado - usando modo offline")
+                self.db = None
                     
         except Exception as e:
             logger.error(f"❌ Erro ao inicializar Firebase: {str(e)}")
+            print(f"❌ Erro ao inicializar Firebase: {str(e)}")
             self.db = None
     
     def is_connected(self) -> bool:

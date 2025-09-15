@@ -2,6 +2,7 @@
 Sistema de Extração Inteligente de Imóveis
 Executa o scraper a cada 30 minutos, compara imóveis do site com Firebase,
 adiciona, remove ou atualiza imóveis conforme necessário.
+Integrado com Groq para análise inteligente de dados.
 """
 
 import aiohttp
@@ -12,19 +13,20 @@ from typing import List, Dict, Any, Optional
 import logging
 from urllib.parse import urljoin
 import json
+import os
 from datetime import datetime
-
 from app.services.firebase_service import FirebaseService
-from llama_index import SimpleDirectoryReader, GPTVectorStoreIndex
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class AllegaPropertyScraper:
-    """Extrator de imóveis do site Allega Imóveis"""
+    """Extrator de imóveis do site Allega Imóveis com análise inteligente via Groq"""
     
     def __init__(self):
         self.base_url = "https://www.allegaimoveis.com"
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.text_model = "llama3-8b-8192"
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -46,6 +48,163 @@ class AllegaPropertyScraper:
         
         # Tipos de transação
         self.transaction_types = ['venda', 'locacao', 'lancamento']
+    
+    async def enhance_property_with_groq(self, property_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enriquece dados do imóvel usando análise inteligente do Groq"""
+        if not self.groq_api_key or not property_data.get('description'):
+            return property_data
+
+        system_prompt = (
+            "Você é um especialista em análise de imóveis. "
+            "Analise a descrição do imóvel e extraia informações úteis como: "
+            "pontos positivos, localização estratégica, público-alvo ideal, "
+            "potencial de valorização. Seja conciso e objetivo."
+        )
+
+        user_prompt = (
+            f"Analise este imóvel:\n"
+            f"Título: {property_data.get('title', '')}\n"
+            f"Tipo: {property_data.get('property_type', '')}\n"
+            f"Bairro: {property_data.get('neighborhood', '')}\n"
+            f"Descrição: {property_data.get('description', '')[:500]}\n"
+            f"Características: {', '.join(property_data.get('features', [])[:5])}\n"
+            "Forneça uma análise profissional em até 200 caracteres."
+        )
+
+        try:
+            payload = {
+                "model": self.text_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "max_tokens": 300,
+                "temperature": 0.3
+            }
+
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions", 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        analysis = result["choices"][0]["message"]["content"].strip()
+                        property_data['ai_analysis'] = analysis[:250]
+                        property_data['ai_enhanced'] = True
+                        logger.info(f"Análise IA adicionada para: {property_data.get('title', '')[:30]}...")
+                    else:
+                        logger.warning(f"Groq API error: {resp.status}")
+        except Exception as e:
+            logger.error(f"Erro ao analisar imóvel com Groq: {str(e)}")
+        
+        return property_data
+
+    async def generate_market_insights(self, properties: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Gera insights de mercado usando Groq"""
+        if not self.groq_api_key or not properties:
+            return self._get_fallback_insights(properties)
+
+        # Preparar dados para análise
+        summary_data = {
+            'total_properties': len(properties),
+            'by_type': {},
+            'by_neighborhood': {},
+            'price_ranges': [],
+            'common_features': []
+        }
+
+        for prop in properties:
+            # Tipos
+            prop_type = prop.get('property_type', 'unknown')
+            summary_data['by_type'][prop_type] = summary_data['by_type'].get(prop_type, 0) + 1
+            
+            # Bairros
+            neighborhood = prop.get('neighborhood', '').strip()
+            if neighborhood:
+                summary_data['by_neighborhood'][neighborhood] = summary_data['by_neighborhood'].get(neighborhood, 0) + 1
+            
+            # Características
+            summary_data['common_features'].extend(prop.get('features', []))
+
+        system_prompt = (
+            "Você é um analista do mercado imobiliário de Curitiba. "
+            "Com base nos dados fornecidos, gere insights sobre tendências, "
+            "bairros em alta, tipos de imóveis mais procurados. "
+            "Seja profissional e específico. Máximo 400 caracteres."
+        )
+
+        user_prompt = f"Dados do mercado: {json.dumps(summary_data, ensure_ascii=False)[:1000]}"
+
+        try:
+            payload = {
+                "model": self.text_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "max_tokens": 500,
+                "temperature": 0.4
+            }
+
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions", 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        insights = result["choices"][0]["message"]["content"].strip()
+                        return {
+                            'ai_insights': insights,
+                            'generated_at': datetime.now().isoformat(),
+                            'data_summary': summary_data
+                        }
+        except Exception as e:
+            logger.error(f"Erro ao gerar insights: {str(e)}")
+        
+        return self._get_fallback_insights(properties)
+
+    def _get_fallback_insights(self, properties: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Insights padrão quando Groq não está disponível"""
+        total = len(properties)
+        by_type = {}
+        by_neighborhood = {}
+        
+        for prop in properties:
+            prop_type = prop.get('property_type', 'unknown')
+            by_type[prop_type] = by_type.get(prop_type, 0) + 1
+            
+            neighborhood = prop.get('neighborhood', '').strip()
+            if neighborhood:
+                by_neighborhood[neighborhood] = by_neighborhood.get(neighborhood, 0) + 1
+
+        top_type = max(by_type.items(), key=lambda x: x[1])[0] if by_type else 'apartamento'
+        top_neighborhood = max(by_neighborhood.items(), key=lambda x: x[1])[0] if by_neighborhood else 'Centro'
+
+        return {
+            'ai_insights': f"Mercado com {total} imóveis. Destaque para {top_type}s no {top_neighborhood}. Boa diversidade de opções.",
+            'generated_at': datetime.now().isoformat(),
+            'data_summary': {
+                'total_properties': total,
+                'by_type': by_type,
+                'by_neighborhood': by_neighborhood
+            }
+        }
     
     async def extract_property_details(self, property_url: str, session: aiohttp.ClientSession) -> Optional[Dict[str, Any]]:
         """Extrai detalhes de um imóvel específico, garantindo todos os campos principais"""
@@ -97,6 +256,8 @@ class AllegaPropertyScraper:
                     'url': property_url,
                     'transaction_type': 'venda',
                     'type': '',
+                    'ai_analysis': '', # Análise da IA
+                    'ai_enhanced': False, # Flag se foi analisado pela IA
                 }
 
                 # Título
@@ -261,7 +422,8 @@ class AllegaPropertyScraper:
                 diff_keywords = [
                     'Amplo quintal', 'Closet Sr. e Sra.', 'Suíte Master com varanda', 'Ar condicionado',
                     'Hidromassagem', 'Lareira', 'Piscina', 'Churrasqueira a carvão', 'Despensa',
-                    'Lavanderia', 'Jardim', 'Área de lazer', 'Mobiliado', 'Próximo ao metrô'
+                    'Lavanderia', 'Jardim', 'Área de lazer', 'Mobiliado', 'Próximo ao metrô',
+                    'Academia', 'Salão de festas', 'Playground', 'Portaria 24h', 'Elevador'
                 ]
                 for kw in diff_keywords:
                     if kw.lower() in html.lower():
@@ -286,6 +448,9 @@ class AllegaPropertyScraper:
                     'email': 'contato@allegaimoveis.com',
                     'address': 'Rua Gastão Câmara, 135 - Bigorrilho, Curitiba - PR'
                 }
+
+                # Enriquecer com análise da IA
+                property_data = await self.enhance_property_with_groq(property_data)
 
                 logger.info(f"Imóvel extraído: {property_data['title'][:50]}... Referência: {property_data['reference']}")
                 return property_data
@@ -355,7 +520,7 @@ class AllegaPropertyScraper:
             logger.info(f"Iniciando extração de {len(unique_links)} imóveis do tipo {property_type}")
             
             # Extrair detalhes de cada imóvel
-            semaphore = asyncio.Semaphore(5)  # Limitar a 5 requisições simultâneas
+            semaphore = asyncio.Semaphore(3)  # Reduzido para 3 para não sobrecarregar
             
             async def extract_with_semaphore(url):
                 async with semaphore:
@@ -391,7 +556,7 @@ class AllegaPropertyScraper:
                     all_properties.extend(properties)
                     
                     # Aguardar um pouco entre os tipos para não sobrecarregar o servidor
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
                     
                 except Exception as e:
                     logger.error(f"Erro ao extrair {property_type} para {transaction_type}: {str(e)}")
@@ -417,8 +582,8 @@ class AllegaPropertyScraper:
             logger.error(f"Erro ao salvar arquivo: {str(e)}")
             return None
     
-    def format_for_ai_training(self, properties: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Formata os dados para treinamento da IA"""
+    async def format_for_ai_training(self, properties: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Formata os dados para treinamento da IA com insights do Groq"""
         
         # Estatísticas gerais
         stats = {
@@ -433,7 +598,8 @@ class AllegaPropertyScraper:
                 'above_1m': 0
             },
             'bedroom_distribution': {},
-            'common_neighborhoods': {}
+            'common_neighborhoods': {},
+            'ai_enhanced_count': 0
         }
         
         for prop in properties:
@@ -457,6 +623,13 @@ class AllegaPropertyScraper:
             neighborhood = prop.get('neighborhood', '').strip()
             if neighborhood:
                 stats['common_neighborhoods'][neighborhood] = stats['common_neighborhoods'].get(neighborhood, 0) + 1
+            
+            # Contagem de análises IA
+            if prop.get('ai_enhanced'):
+                stats['ai_enhanced_count'] += 1
+        
+        # Gerar insights de mercado usando Groq
+        market_insights = await self.generate_market_insights(properties)
         
         # Criar base de conhecimento para IA
         knowledge_base = {
@@ -475,19 +648,13 @@ class AllegaPropertyScraper:
             'common_neighborhoods': dict(sorted(stats['common_neighborhoods'].items(), 
                                                key=lambda x: x[1], reverse=True)[:10]),
             'statistics': stats,
+            'market_insights': market_insights,
             'sample_properties': properties[:10],  # Amostras para referência
+            'ai_enhanced_properties': [p for p in properties if p.get('ai_enhanced')][:5],
             'last_updated': datetime.now().isoformat()
         }
         
         return knowledge_base
-
-
-def create_property_index(json_folder: str = "data_folder"):
-    """Cria um índice inteligente dos imóveis usando LlamaIndex"""
-    documents = SimpleDirectoryReader(json_folder).load_data()
-    index = GPTVectorStoreIndex.from_documents(documents)
-    index.save_to_disk("property_index.json")
-    return index
 
 
 async def monitor_scraper(interval_minutes: int = 30, max_properties: int = 100):
@@ -498,38 +665,47 @@ async def monitor_scraper(interval_minutes: int = 30, max_properties: int = 100)
 
     while True:
         logger.info(f"[{datetime.now()}] Iniciando verificação de imóveis...")
-        # Extrai imóveis do site
-        scraped_properties = await scraper.scrape_all_properties(max_per_type=max_properties // 4)
-        scraped_dict = {p['reference']: p for p in scraped_properties if p.get('reference')}
+        try:
+            # Extrai imóveis do site
+            scraped_properties = await scraper.scrape_all_properties(max_per_type=max_properties // 4)
+            scraped_dict = {p['reference']: p for p in scraped_properties if p.get('reference')}
 
-        # Busca imóveis do Firebase
-        firebase_properties = await firebase.get_property_data()
-        firebase_dict = {p['reference']: p for p in firebase_properties if p.get('reference')}
+            # Busca imóveis do Firebase
+            firebase_properties = await firebase.get_property_data()
+            firebase_dict = {p['reference']: p for p in firebase_properties if p.get('reference')}
 
-        # Detecta imóveis novos
-        new_refs = set(scraped_dict.keys()) - set(firebase_dict.keys())
-        new_properties = [scraped_dict[ref] for ref in new_refs]
+            # Detecta imóveis novos
+            new_refs = set(scraped_dict.keys()) - set(firebase_dict.keys())
+            new_properties = [scraped_dict[ref] for ref in new_refs]
 
-        # Detecta imóveis removidos
-        removed_refs = set(firebase_dict.keys()) - set(scraped_dict.keys())
-        removed_properties = [firebase_dict[ref] for ref in removed_refs]
+            # Detecta imóveis removidos
+            removed_refs = set(firebase_dict.keys()) - set(scraped_dict.keys())
+            removed_properties = [firebase_dict[ref] for ref in removed_refs]
 
-        # Detecta imóveis atualizados
-        updated_properties = []
-        for ref in set(scraped_dict.keys()) & set(firebase_dict.keys()):
-            if scraped_dict[ref] != firebase_dict[ref]:
-                updated_properties.append(scraped_dict[ref])
+            # Detecta imóveis atualizados
+            updated_properties = []
+            for ref in set(scraped_dict.keys()) & set(firebase_dict.keys()):
+                if scraped_dict[ref] != firebase_dict[ref]:
+                    updated_properties.append(scraped_dict[ref])
 
-        # Atualiza Firebase
-        if new_properties:
-            logger.info(f"Adicionando {len(new_properties)} novos imóveis ao Firebase")
-            await firebase.add_properties(new_properties)
-        if removed_properties:
-            logger.info(f"Removendo {len(removed_properties)} imóveis do Firebase")
-            await firebase.remove_properties([p['reference'] for p in removed_properties])
-        if updated_properties:
-            logger.info(f"Atualizando {len(updated_properties)} imóveis no Firebase")
-            await firebase.update_properties(updated_properties)
+            # Atualiza Firebase
+            if new_properties:
+                logger.info(f"Adicionando {len(new_properties)} novos imóveis ao Firebase")
+                await firebase.add_properties(new_properties)
+            if removed_properties:
+                logger.info(f"Removendo {len(removed_properties)} imóveis do Firebase")
+                await firebase.remove_properties([p['reference'] for p in removed_properties])
+            if updated_properties:
+                logger.info(f"Atualizando {len(updated_properties)} imóveis no Firebase")
+                await firebase.update_properties(updated_properties)
+
+            # Gerar insights de mercado
+            if scraped_properties:
+                insights = await scraper.generate_market_insights(scraped_properties)
+                logger.info(f"Insights de mercado: {insights.get('ai_insights', 'N/A')[:100]}...")
+
+        except Exception as e:
+            logger.error(f"Erro durante monitoramento: {str(e)}")
 
         logger.info("Verificação concluída. Aguardando próxima execução...")
         await asyncio.sleep(interval)
@@ -537,10 +713,10 @@ async def monitor_scraper(interval_minutes: int = 30, max_properties: int = 100)
 
 # Função principal para uso externo
 async def scrape_allega_properties(max_properties: int = 100) -> Dict[str, Any]:
-    """Função principal para extrair imóveis da Allega"""
+    """Função principal para extrair imóveis da Allega com análise inteligente"""
     scraper = AllegaPropertyScraper()
     
-    logger.info("Iniciando extração de imóveis da Allega Imóveis...")
+    logger.info("Iniciando extração de imóveis da Allega Imóveis com análise IA...")
     
     # Extrair imóveis
     properties = await scraper.scrape_all_properties(max_per_type=max_properties // 4)
@@ -551,19 +727,21 @@ async def scrape_allega_properties(max_properties: int = 100) -> Dict[str, Any]:
     
     # Salvar dados brutos
     filename = scraper.save_properties_to_file(properties)
-    knowledge_base = scraper.format_for_ai_training(properties)
+    knowledge_base = await scraper.format_for_ai_training(properties)
 
     # Cria o índice para busca rápida
-    import os
-    data_folder = os.path.dirname(filename)
-    create_property_index(json_folder=data_folder)
+    if filename:
+        data_folder = os.path.dirname(filename) or "."
 
-    logger.info(f"Extração concluída: {len(properties)} imóveis processados")
+    ai_enhanced_count = sum(1 for p in properties if p.get('ai_enhanced'))
+    logger.info(f"Extração concluída: {len(properties)} imóveis processados, {ai_enhanced_count} com análise IA")
     
     return {
         'properties': properties,
         'knowledge_base': knowledge_base,
-        'filename': filename
+        'filename': filename,
+        'ai_enhanced_count': ai_enhanced_count,
+        'market_insights': knowledge_base.get('market_insights', {})
     }
 
 

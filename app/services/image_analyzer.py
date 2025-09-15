@@ -1,6 +1,6 @@
 """
 Chatbot Inteligente para Análise de Imóveis
-Integra o PropertyImageAnalyzer com interface de chat
+Integra o PropertyImageAnalyzer com interface de chat usando Groq Vision
 """
 
 import asyncio
@@ -13,51 +13,98 @@ import aiohttp
 import socket
 import random
 import base64
-from llama_index import GPTVectorStoreIndex
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PropertyImageAnalyzer:
-    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.2-vision", index_path: str = "property_index.json"):
-        self.ollama_url = ollama_url
-        self.model = model
-        self.index_path = index_path
+    def __init__(self):
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.groq_vision_model = "llama-3.2-11b-vision-preview"  # Modelo com visão do Groq
 
     async def analyze_property_image(self, image_bytes: bytes, prompt: str = "Analyze this property image") -> dict:
         try:
-            logger.info(f"Analisando imagem ({len(image_bytes)} bytes) com LLaMA 3.2 Vision")
+            logger.info(f"Analisando imagem ({len(image_bytes)} bytes) com Groq Vision")
+            
+            if not self.groq_api_key:
+                return {"success": False, "error": "Groq API key não configurada"}
+            
+            # Converter imagem para base64
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+            
+            # Prompt específico para análise de imóveis
+            enhanced_prompt = (
+                f"{prompt}\n\n"
+                "Analise esta imagem de imóvel e identifique:\n"
+                "- Tipo de imóvel (casa, apartamento, terreno)\n"
+                "- Características visíveis (quartos, banheiros, garagem)\n"
+                "- Estado de conservação\n"
+                "- Localização aproximada se possível\n"
+                "- Diferenciais e pontos de destaque\n"
+                "- Valor estimado se conseguir identificar\n\n"
+                "Seja específico e profissional na análise."
+            )
+            
             payload = {
-                "model": self.model,
+                "model": self.groq_vision_model,
                 "messages": [{
                     "role": "user",
-                    "content": prompt,
-                    "images": [image_b64]
-                }]
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": enhanced_prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_b64}"
+                            }
+                        }
+                    ]
+                }],
+                "max_tokens": 1000,
+                "temperature": 0.3
             }
+            
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+            
             async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.ollama_url}/api/chat", json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions", 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=aiohttp.ClientTimeout(total=60)
+                ) as resp:
                     text = await resp.text()
-                    logger.info(f"Resposta recebida: status={resp.status}, body={text[:200]}")
+                    logger.info(f"Resposta Groq Vision: status={resp.status}, body={text[:200]}")
+                    
                     if resp.status == 200:
                         result = await resp.json()
+                        llm_content = result["choices"][0]["message"]["content"]
+                        
                         # Tenta extrair características do imóvel da resposta da IA
-                        llm_content = result.get("message", {}).get("content", "")
                         extracted_query = self._extract_query_from_llm(llm_content)
-                        index_response = None
-                        if extracted_query:
-                            index_response = self.query_property_index(extracted_query)
+                        
                         return {
                             "success": True,
-                            "response": result,
-                            "index_query": extracted_query,
-                            "index_response": str(index_response) if index_response else None
+                            "response": {
+                                "message": {
+                                    "content": llm_content
+                                }
+                            }
                         }
                     else:
-                        return {"success": False, "error": f"Status {resp.status}: {text}"}
+                        error_data = await resp.json() if resp.content_type == 'application/json' else {"error": text}
+                        return {
+                            "success": False, 
+                            "error": f"Groq API Error {resp.status}: {error_data.get('error', {}).get('message', text)}"
+                        }
+                        
         except Exception as e:
-            logger.error(f"Erro ao analisar imagem com LLaMA 3.2 Vision: {e}")
+            logger.error(f"Erro ao analisar imagem com Groq Vision: {e}")
             return {"success": False, "error": str(e)}
 
     def _extract_query_from_llm(self, llm_content: str) -> str:
@@ -65,37 +112,46 @@ class PropertyImageAnalyzer:
         Extrai uma consulta textual do conteúdo gerado pela IA Vision.
         Exemplo: busca por 'casa 3 quartos Bigorrilho'
         """
-        # Simples heurística: pega a primeira frase que contém tipo, quartos e bairro
         import re
-        match = re.search(r'(casa|apartamento|imóvel)[^\n]*?(\d+)\s*quartos?[^\n]*?(bigorrilho|batel|centro|cabral|champagnat)', llm_content, re.IGNORECASE)
-        if match:
-            return match.group(0)
-        # Fallback: retorna a primeira frase
+        
+        # Busca por padrões mais específicos
+        patterns = [
+            r'(casa|apartamento|imóvel)[^\n]*?(\d+)\s*quartos?[^\n]*?(bigorrilho|batel|centro|cabral|champagnat|água verde|portão|santa felicidade)',
+            r'(casa|apartamento)[^\n]*?(bigorrilho|batel|centro|cabral|champagnat|água verde|portão|santa felicidade)[^\n]*?(\d+)\s*quartos?',
+            r'(casa|apartamento|imóvel)[^\n]*?(\d+)\s*quartos?',
+            r'(casa|apartamento|imóvel)[^\n]*?(bigorrilho|batel|centro|cabral|champagnat|água verde|portão|santa felicidade)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, llm_content, re.IGNORECASE)
+            if match:
+                return match.group(0)
+        
+        # Fallback: extrai palavras-chave relevantes
+        keywords = re.findall(r'\b(casa|apartamento|imóvel|\d+\s*quartos?|bigorrilho|batel|centro|cabral|champagnat|água verde|portão|santa felicidade|garagem|suite|banheiro)\b', llm_content, re.IGNORECASE)
+        if keywords:
+            return ' '.join(keywords[:5])  # Primeiras 5 palavras-chave
+        
+        # Último fallback: primeira frase
         return llm_content.split('.')[0] if llm_content else ""
 
-    def query_property_index(self, query: str):
-        """
-        Consulta o índice inteligente de imóveis usando LlamaIndex.
-        """
-        try:
-            index = GPTVectorStoreIndex.load_from_disk(self.index_path)
-            response = index.query(query)
-            return response
-        except Exception as e:
-            logger.error(f"Erro ao consultar o índice de imóveis: {str(e)}")
-            return None
 
     def format_analysis_response(self, analysis_result: Dict, user_message: str) -> str:
         if not analysis_result.get("success", True):
             error_msg = analysis_result.get("error", "Erro desconhecido")
-            return f"😅 *Tive dificuldade para analisar esta imagem.*\n\nErro: {error_msg}\n\n📞 *Fale direto com nossos especialistas:*\n🏠 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
+            return (
+                f"😅 *Tive dificuldade para analisar esta imagem.*\n\n"
+                f"Erro: {error_msg}\n\n"
+                f"📞 *Fale direto com nossos especialistas:*\n"
+                f"🏠 Vendas: (41) 99214-6670\n"
+                f"🏡 Locação: (41) 99223-0874"
+            )
 
         response = "🏠 *Análise do Imóvel Concluída*\n\n"
         llm_response = analysis_result.get("response", {}).get("message", {}).get("content", "")
         response += f"{llm_response}\n\n"
-        if analysis_result.get("index_response"):
-            response += f"🔎 *Imóveis similares encontrados:*\n{analysis_result['index_response']}\n\n"
-        response += "💡 *Análise concluída!*\n"
+        
+        response += "💡 *Análise concluída pela Sofia da Allega Imóveis!*\n"
         response += "📞 *Quer mais informações? Entre em contato:*\n"
         response += "🏠 Vendas: (41) 99214-6670\n"
         response += "🏡 Locação: (41) 99223-0874"
@@ -109,8 +165,8 @@ class PropertyChatbot:
         self.conversation_history = {}
 
         self.responses = {
-            'greeting': "🏠 *Olá! Sou o assistente da Allega Imóveis!*\n\nEnvie uma foto de imóvel para análise ou digite 'ajuda' para ver comandos.\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874",
-            'help': "🤖 *Como usar o assistente:*\n\n• Envie uma foto do imóvel\n• Eu analiso automaticamente\n• Receba informações detalhadas\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874",
+            'greeting': "🏠 *Olá! Sou a Sofia, assistente da Allega Imóveis!*\n\nEnvie uma foto de imóvel para análise ou digite 'ajuda' para ver comandos.\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874",
+            'help': "🤖 *Como usar a Sofia:*\n\n• Envie uma foto do imóvel\n• Eu analiso automaticamente\n• Receba informações detalhadas\n• Encontre imóveis similares\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874",
             'no_image': "📸 *Preciso de uma imagem para analisar!*\n\nEnvie uma foto do imóvel que você quer analisar.\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
         }
 
@@ -145,27 +201,44 @@ class PropertyChatbot:
         try:
             prompt = f"Analyze this property image. User message: {message}"
             analysis_result = await self.analyzer.analyze_property_image(image_data, prompt)
+            
             self.conversation_history[user_id].append({
                 'timestamp': datetime.now().isoformat(),
                 'analysis_result': analysis_result,
             })
+            
             return self.analyzer.format_analysis_response(analysis_result, message)
         except Exception as e:
             logger.error(f"Erro na análise de imagem: {str(e)}")
             return self._get_analysis_error_response()
 
     def _default_text_response(self, message: str) -> str:
-        return "🤖 *Não entendi bem sua mensagem.*\n\nEnvie uma foto de um imóvel ou digite 'ajuda' para ver todos os comandos.\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
+        return (
+            "🤖 *Não entendi bem sua mensagem.*\n\n"
+            "Envie uma foto de um imóvel ou digite 'ajuda' para ver todos os comandos.\n\n"
+            "📞 Vendas: (41) 99214-6670\n"
+            "🏡 Locação: (41) 99223-0874"
+        )
 
     def _get_error_response(self) -> str:
-        return "😅 *Ops! Algo deu errado.*\n\nTente novamente ou entre em contato diretamente:\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
+        return (
+            "😅 *Ops! Algo deu errado.*\n\n"
+            "Tente novamente ou entre em contato diretamente:\n\n"
+            "📞 Vendas: (41) 99214-6670\n"
+            "🏡 Locação: (41) 99223-0874"
+        )
 
     def _get_analysis_error_response(self) -> str:
-        return "🔧 *Sistema de análise temporariamente indisponível*\n\n📞 Vendas: (41) 99214-6670\n🏡 Locação: (41) 99223-0874"
+        return (
+            "🔧 *Sistema de análise temporariamente indisponível*\n\n"
+            "📞 Vendas: (41) 99214-6670\n"
+            "🏡 Locação: (41) 99223-0874"
+        )
 
     def get_user_stats(self, user_id: str) -> Dict:
         if user_id not in self.conversation_history:
             return {'messages': 0, 'images_analyzed': 0}
+        
         history = self.conversation_history[user_id]
         return {
             'messages': len(history),

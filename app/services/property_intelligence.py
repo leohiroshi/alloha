@@ -1,16 +1,16 @@
 """
 Serviço de Inteligência Imobiliária
-Integra dados de imóveis com a IA LLaMA 3.1 para respostas inteligentes
+Integra dados de imóveis com a IA Groq para respostas inteligentes
 """
 
 import json
 import logging
 import asyncio
+import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import re
 import aiohttp
-from llama_index import GPTVectorStoreIndex
 
 from .firebase_service import FirebaseService
 
@@ -18,12 +18,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PropertyIntelligenceService:
-    """Serviço que combina LLaMA 3.1 com dados imobiliários"""
+    """Serviço que combina Groq com dados imobiliários"""
 
-    def __init__(self, ollama_url: str = "http://localhost:11434", model: str = "llama3.2:1b"):
+    def __init__(self):
         self.firebase_service = FirebaseService()
-        self.ollama_url = ollama_url
-        self.model = model
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.text_model = "llama3-8b-8192"  # Modelo de texto do Groq
         self.property_cache = {}
         self.cache_expiry = timedelta(hours=6)
         self.last_cache_update = None
@@ -117,13 +117,45 @@ class PropertyIntelligenceService:
                     'description': 'Apartamento próximo ao centro da cidade',
                     'features': ['Mobiliado', 'Próximo ao metrô'],
                     'url': 'https://www.allegaimoveis.com/imovel/3'
+                },
+                {
+                    'id': '4',
+                    'title': 'Casa 3 quartos no Batel',
+                    'property_type': 'casa',
+                    'transaction_type': 'venda',
+                    'bedrooms': 3,
+                    'bathrooms': 2,
+                    'parking_spaces': 2,
+                    'area_total': '150m²',
+                    'price': 'R$ 650.000,00',
+                    'neighborhood': 'Batel',
+                    'city': 'Curitiba',
+                    'description': 'Casa em condomínio fechado com segurança 24h',
+                    'features': ['Condomínio fechado', 'Segurança 24h', 'Área verde'],
+                    'url': 'https://www.allegaimoveis.com/imovel/4'
+                },
+                {
+                    'id': '5',
+                    'title': 'Apartamento 1 quarto Água Verde',
+                    'property_type': 'apartamento',
+                    'transaction_type': 'locacao',
+                    'bedrooms': 1,
+                    'bathrooms': 1,
+                    'parking_spaces': 1,
+                    'area_total': '45m²',
+                    'price': 'R$ 1.200,00/mês',
+                    'neighborhood': 'Água Verde',
+                    'city': 'Curitiba',
+                    'description': 'Apartamento compacto e moderno',
+                    'features': ['Mobiliado', 'Academia', 'Piscina'],
+                    'url': 'https://www.allegaimoveis.com/imovel/5'
                 }
             ],
             'statistics': {
-                'total_properties': 3,
-                'by_type': {'apartamento': 2, 'casa': 1},
-                'by_transaction': {'venda': 2, 'locacao': 1},
-                'by_city': {'Curitiba': 3}
+                'total_properties': 5,
+                'by_type': {'apartamento': 3, 'casa': 2},
+                'by_transaction': {'venda': 3, 'locacao': 2},
+                'by_city': {'Curitiba': 5}
             }
         }
         self.last_cache_update = datetime.now()
@@ -220,7 +252,7 @@ class PropertyIntelligenceService:
         if bedroom_match:
             criteria['bedrooms'] = int(bedroom_match.group(1))
 
-        locations = ['bigorrilho', 'champagnat', 'centro', 'água verde', 'batel', 'cabral']
+        locations = ['bigorrilho', 'champagnat', 'centro', 'água verde', 'batel', 'cabral', 'portão', 'santa felicidade']
         for location in locations:
             if location in message_lower:
                 criteria['neighborhood'] = location
@@ -269,6 +301,10 @@ class PropertyIntelligenceService:
             if prop.get('description'):
                 response += f"📝 {prop['description'][:100]}...\n"
 
+            if prop.get('features'):
+                features = ', '.join(prop['features'][:3])
+                response += f"✨ {features}\n"
+
             response += f"🔗 {prop.get('url', 'Ver mais detalhes')}\n\n"
 
         if len(properties) > 3:
@@ -303,48 +339,21 @@ class PropertyIntelligenceService:
             f"_CRECI {self.company_info['creci']} - Profissionais Certificados_"
         )
 
-    @property
-    def property_index(self) -> Optional[GPTVectorStoreIndex]:
-        """Retorna o índice de busca inteligente dos imóveis, se existir."""
-        try:
-            index = GPTVectorStoreIndex.load_from_disk("property_index.json")
-            return index
-        except Exception as e:
-            logger.error(f"Erro ao carregar o índice de imóveis: {str(e)}")
-            return None
-
-    def query_property_index(self, query: str) -> Optional[str]:
-        """Consulta o índice inteligente de imóveis usando LlamaIndex."""
-        index = self.property_index
-        if not index:
-            return None
-        try:
-            response = index.query(query)
-            return str(response)
-        except Exception as e:
-            logger.error(f"Erro ao consultar o índice de imóveis: {str(e)}")
-            return None
-
     async def process_property_inquiry(self, message: str, user_id: str) -> str:
-        """Processa consulta sobre imóveis usando LLaMA 3.1 e o índice inteligente"""
+        """Processa consulta sobre imóveis usando Groq e o índice inteligente"""
         try:
             await self.load_property_data()
             criteria = self.extract_search_criteria(message)
             logger.info(f"Busca de imóveis - User: {user_id}, Critérios: {criteria}")
 
-            # Consulta o índice inteligente primeiro
-            index_response = self.query_property_index(message)
-            if index_response:
-                response = f"🔎 *Busca inteligente de imóveis:*\n{index_response}\n\n"
-            else:
-                properties = self.search_properties(criteria)
-                await self.firebase_service.save_property_search(user_id, criteria, len(properties))
-                response = self.format_property_response(properties, criteria)
+            properties = self.search_properties(criteria)
+            await self.firebase_service.save_property_search(user_id, criteria, len(properties))
+            response = self.format_property_response(properties, criteria)
 
-            # Chama LLaMA 3.1 para enriquecer a resposta
-            llama_response = await self._call_llama_property_assistant(message, criteria, [])
-            if llama_response:
-                response += f"\n\n🤖 *Dica da IA:*\n{llama_response}"
+            # Chama Groq para enriquecer a resposta
+            groq_response = await self._call_groq_property_assistant(message, criteria, properties[:2])
+            if groq_response:
+                response += f"\n\n🤖 *Dica da Sofia:*\n{groq_response}"
 
             return response
 
@@ -358,35 +367,57 @@ class PropertyIntelligenceService:
                 "Nossos especialistas vão te ajudar! 😊"
             )
 
-    async def _call_llama_property_assistant(self, message: str, criteria: Dict[str, Any], properties: List[Dict[str, Any]]) -> Optional[str]:
-        """Chama LLaMA 3.1 para gerar dica ou resumo inteligente"""
-        prompt = (
-            "Você é o assistente virtual da Allega Imóveis. "
-            "O usuário enviou a seguinte mensagem sobre busca de imóveis:\n"
-            f"\"{message}\"\n"
-            f"Critérios extraídos: {json.dumps(criteria, ensure_ascii=False)}\n"
-            f"Imóveis encontrados: {json.dumps(properties[:2], ensure_ascii=False)}\n"
-            "Responda de forma amigável, profissional e objetiva. "
-            "Se possível, ofereça dicas, sugestões ou peça mais detalhes para ajudar o usuário a encontrar o imóvel ideal."
+    async def _call_groq_property_assistant(self, message: str, criteria: Dict[str, Any], properties: List[Dict[str, Any]]) -> Optional[str]:
+        """Chama Groq para gerar dica ou resumo inteligente"""
+        if not self.groq_api_key:
+            return None
+
+        system_prompt = (
+            "Você é a Sofia, assistente virtual da Allega Imóveis. "
+            "Forneça dicas úteis, sugestões ou peça mais detalhes para ajudar o usuário a encontrar o imóvel ideal. "
+            "Seja amigável, profissional e objetiva. Máximo 200 caracteres."
         )
-        payload = {
-            "model": self.model,
-            "messages": [{
-                "role": "user",
-                "content": prompt
-            }]
-        }
+
+        user_prompt = (
+            f"Usuário perguntou: \"{message}\"\n"
+            f"Critérios extraídos: {json.dumps(criteria, ensure_ascii=False)}\n"
+            f"Imóveis encontrados: {len(properties)} resultados\n"
+            "Dê uma dica útil ou sugestão para ajudar na busca."
+        )
+
         try:
+            payload = {
+                "model": self.text_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "max_tokens": 300,
+                "temperature": 0.3
+            }
+
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+
             async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.ollama_url}/api/chat", json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                    text = await resp.text()
-                    logger.info(f"LLaMA 3.1 resposta: status={resp.status}, body={text[:200]}")
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions", 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
                     if resp.status == 200:
                         result = await resp.json()
-                        return result.get("message", {}).get("content", "")
+                        content = result["choices"][0]["message"]["content"].strip()
+                        return content[:250] if len(content) > 250 else content
+                    else:
+                        logger.error(f"Groq API error: {resp.status}")
+                        return None
         except Exception as e:
-            logger.error(f"Erro ao chamar LLaMA 3.1: {str(e)}")
-        return None
+            logger.error(f"Erro ao chamar Groq: {str(e)}")
+            return None
 
     def get_market_insights(self) -> str:
         """Retorna insights do mercado baseado nos dados"""
@@ -436,10 +467,66 @@ class PropertyIntelligenceService:
             'apartamento', 'casa', 'imóvel', 'imovel', 'comprar', 'vender',
             'alugar', 'aluguel', 'locação', 'locacao', 'venda', 'terreno',
             'sobrado', 'cobertura', 'quarto', 'dormitório', 'garagem',
-            'curitiba', 'bigorrilho', 'champagnat', 'preço', 'preco',
-            'financiamento', 'fgts', 'investimento'
+            'curitiba', 'bigorrilho', 'champagnat', 'batel', 'água verde',
+            'preço', 'preco', 'financiamento', 'fgts', 'investimento'
         ]
         message_lower = message.lower()
         return any(keyword in message_lower for keyword in property_keywords)
+
+    async def get_property_recommendations(self, user_preferences: Dict[str, Any]) -> str:
+        """Gera recomendações personalizadas usando Groq"""
+        if not self.groq_api_key:
+            return self._get_fallback_recommendations()
+
+        system_prompt = (
+            "Você é a Sofia da Allega Imóveis. "
+            "Com base nas preferências do usuário, sugira tipos de imóveis e bairros em Curitiba. "
+            "Seja específica e útil. Máximo 300 caracteres."
+        )
+
+        user_prompt = f"Preferências do usuário: {json.dumps(user_preferences, ensure_ascii=False)}"
+
+        try:
+            payload = {
+                "model": self.text_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "max_tokens": 400,
+                "temperature": 0.4
+            }
+
+            headers = {
+                "Authorization": f"Bearer {self.groq_api_key}",
+                "Content-Type": "application/json"
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions", 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        content = result["choices"][0]["message"]["content"].strip()
+                        return f"💡 *Recomendações da Sofia:*\n{content}\n\n{self._add_contact_info()}"
+                    else:
+                        return self._get_fallback_recommendations()
+        except Exception as e:
+            logger.error(f"Erro ao gerar recomendações: {str(e)}")
+            return self._get_fallback_recommendations()
+
+    def _get_fallback_recommendations(self) -> str:
+        """Recomendações padrão quando Groq não está disponível"""
+        return (
+            "💡 *Recomendações da Allega Imóveis:*\n\n"
+            "🏠 Para famílias: Casas no Champagnat ou Batel\n"
+            "🏢 Para investimento: Apartamentos no Centro\n"
+            "🌳 Para tranquilidade: Bigorrilho ou Água Verde\n\n"
+            f"{self._add_contact_info()}"
+        )
 
 property_intelligence = PropertyIntelligenceService()
