@@ -114,8 +114,8 @@ jobs:
                     - name: OLLAMA_MODELS
                       value: "llama3.1,llama3.2-vision"
                   resources:
-                    cpu: 2.0
-                    memory: 4Gi
+                    cpu: 4.0
+                    memory: 8Gi
           EOF
 
       - name: 🚀 Deploy to Container Apps (multi-container)
