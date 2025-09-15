@@ -11,6 +11,7 @@ from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
 from app.services.ai_service import ai_service
 from app.services.property_intelligence import property_intelligence
+from app.services.firebase_service import firebase_service
 from app.services.property_scraper import monitor_scraper
 
 # Configurar logging
@@ -67,7 +68,7 @@ async def health():
         # Verificar conectividade do Firebase
         firebase_status = "unknown"
         try:
-            await intelligent_bot.firebase_service.check_connection()
+            await firebase_service.check_connection()
             firebase_status = "connected"
         except:
             firebase_status = "disconnected"

@@ -474,3 +474,6 @@ Quer agendar uma conversa?"""
         else:
             self.conversation_context.clear()
             logger.info("🗑️ Todo o cache de conversas foi limpo")
+
+            
+ai_service = AIService()
