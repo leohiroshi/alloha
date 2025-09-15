@@ -13,7 +13,7 @@ RUN mkdir -p /root/.ollama
 # Expõe a porta padrão do Ollama
 EXPOSE 11434
 
-# Script para inicializar e baixar modelos
+# Copia o script de inicialização
 COPY start-ollama.sh /start-ollama.sh
 
 # Torna o script executável
@@ -27,5 +27,5 @@ ENV OLLAMA_MODELS=${OLLAMA_MODELS}
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:11434/api/tags || exit 1
 
-# Comando para iniciar
-CMD ["/start-ollama.sh"]
+# Comando para iniciar - CORRIGIDO: usar bash explicitamente
+CMD ["bash", "/start-ollama.sh"]
