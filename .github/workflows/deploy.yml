@@ -65,7 +65,6 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           GITHUB_SHA_SHORT=${GITHUB_SHA::7}
-          
           cat > containerapp-config.yaml << EOF
           properties:
             template:
