@@ -43,12 +43,6 @@ class IntelligentRealEstateBot:
         """Processa mensagem do usuário com Groq"""
         try:
             logger.info(f"📨 Mensagem de {user_phone}: {message[:50]}...")
-
-            # Verificar se é busca de imóveis
-            if self._is_property_search(message):
-                property_response = await self.process_property_search(message)
-                if property_response and "não está disponível" not in property_response:
-                    return property_response
             
             prompt = self._build_prompt(message, user_phone)
             response = await self._call_groq(prompt)
