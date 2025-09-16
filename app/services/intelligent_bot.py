@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
+import json
+import tempfile
 
 load_dotenv()
 
@@ -27,7 +29,18 @@ if not logger.hasHandlers():
 
 # Inicialize o Firebase apenas uma vez
 if not firebase_admin._apps:
-    cred = credentials.Certificate(os.getenv("FIREBASE_CREDENTIALS"))
+    firebase_credentials_json = os.getenv("FIREBASE_CREDENTIALS")
+    if firebase_credentials_json and firebase_credentials_json.strip().startswith("{"):
+        # Cria arquivo temporário com o conteúdo do JSON
+        temp_cred_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+        temp_cred_file.write(firebase_credentials_json.encode())
+        temp_cred_file.close()
+        firebase_cred_path = temp_cred_file.name
+    else:
+        # Se já for um caminho, usa direto
+        firebase_cred_path = firebase_credentials_json
+
+    cred = credentials.Certificate(firebase_cred_path)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
