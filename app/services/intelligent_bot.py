@@ -13,6 +13,7 @@ import os
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, firestore
+from datetime import datetime
 
 load_dotenv()
 
@@ -24,7 +25,7 @@ if not logger.hasHandlers():
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-# Inicialize o Firebase apenas uma vez (fora da classe)
+# Inicialize o Firebase apenas uma vez
 if not firebase_admin._apps:
     cred = credentials.Certificate(os.getenv("FIREBASE_CREDENTIALS"))
     firebase_admin.initialize_app(cred)
@@ -47,19 +48,54 @@ class IntelligentRealEstateBot:
         }
         logger.info("Bot de Inteligência Imobiliária com Groq iniciado")
 
+    async def get_conversation_history(self, user_phone, limit=10):
+        """
+        Busca as últimas mensagens do usuário e do bot no Firestore para manter o contexto da conversa.
+        """
+        messages_ref = db.collection("messages")
+        query = (
+            messages_ref
+            .where("user_phone", "==", user_phone)
+            .order_by("timestamp", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+        )
+        docs = query.stream()
+        history = []
+        for doc in reversed(list(docs)):  # do mais antigo para o mais recente
+            data = doc.to_dict()
+            role = "user" if data.get("direction") == "received" else "assistant"
+            history.append({"role": role, "content": data.get("message", "")})
+        return history
+
     async def process_message(self, message: str, user_phone: str) -> str:
-        """Processa mensagem do usuário com Groq"""
+        """
+        Processa mensagem do usuário, mantendo o contexto da conversa salvo no Firebase.
+        """
         try:
             logger.info(f"📨 Mensagem de {user_phone}: {message[:50]}...")
 
-            # Verificar se é busca de imóveis
-            if self._is_property_search(message):
-                property_response = await self.process_property_search(message)
-                if property_response and "não está disponível" not in property_response:
-                    return property_response
-            
-            prompt = self._build_prompt(message, user_phone)
-            response = await self._call_groq(prompt)
+            # Busca o histórico recente da conversa
+            history = await self.get_conversation_history(user_phone, limit=10)
+
+            # Adiciona a mensagem atual do usuário ao histórico
+            history.append({"role": "user", "content": message})
+
+            # Prompt inicial só se for o início da conversa
+            if len(history) == 1:
+                system_prompt = self._build_prompt("", user_phone)
+                history = [{"role": "system", "content": system_prompt}] + history
+
+            response = await self._call_groq_with_history(history)
+
+            # Salva a resposta do bot no Firestore
+            db.collection("messages").add({
+                "user_phone": user_phone,
+                "message": response,
+                "direction": "sent",
+                "timestamp": datetime.utcnow(),
+                "metadata": {}
+            })
+
             logger.info(f"✅ Resposta enviada para {user_phone}")
             return response
         except Exception as e:
@@ -301,6 +337,41 @@ class IntelligentRealEstateBot:
             "studio", "kitnet", "cobertura", "sobrado", "comercial"
         ]
         return any(kw in message.lower() for kw in keywords)
+
+    async def _call_groq_with_history(self, history: list) -> str:
+        """
+        Chama a API do Groq usando o histórico da conversa.
+        """
+        if not self.groq_api_key:
+            return "Configuração da API não encontrada."
+        
+        payload = {
+            "model": self.text_model,
+            "messages": history,
+            "max_tokens": 1000,
+            "temperature": 0.7
+        }
+        
+        headers = {
+            "Authorization": f"Bearer {self.groq_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post("https://api.groq.com/openai/v1/chat/completions", 
+                                    json=payload, headers=headers, 
+                                    timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        return result["choices"][0]["message"]["content"]
+                    else:
+                        error_text = await resp.text()
+                        logger.error(f"Erro Groq com histórico: {resp.status} - {error_text}")
+                        return "😅 Tive dificuldade técnica para responder no momento."
+        except Exception as e:
+            logger.error(f"Erro ao chamar Groq com histórico: {str(e)}")
+            return "😅 Tive dificuldade técnica para responder no momento."
 
 # Instância global do bot
 intelligent_bot = IntelligentRealEstateBot()
