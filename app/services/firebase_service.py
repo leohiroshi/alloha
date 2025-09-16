@@ -15,17 +15,19 @@ logger = logging.getLogger(__name__)
 
 class FirebaseService:
     def __init__(self):
+        logger.info("🔄 Inicializando FirebaseService...")
         self.db = None
         self._initialize_firebase()
     
     def _initialize_firebase(self):
         """Inicializar Firebase"""
         try:
-            # DEBUG: Verificar se variável existe
             firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
-            
+            logger.info(f"🔑 Firebase Credentials: {'Set' if firebase_credentials else 'Not Set'}")
+
             # Verificar se já foi inicializado
             if firebase_admin._apps:
+                logger.info("✅ Firebase já inicializado")
                 self.db = firestore.client()
                 return
             
@@ -33,9 +35,11 @@ class FirebaseService:
                 # Se credenciais estão em base64 (para GitHub Actions)
                 try:
                     if firebase_credentials.startswith('eyJ'):  # JSON base64
+                        logger.info("🔐 Decodificando credenciais do Firebase de base64")
                         decoded_creds = base64.b64decode(firebase_credentials).decode('utf-8')
                         cred_dict = json.loads(decoded_creds)
                     else:
+                        logger.info("🔐 Carregando credenciais do Firebase do JSON")
                         cred_dict = json.loads(firebase_credentials)
                     
                     cred = credentials.Certificate(cred_dict)
@@ -59,10 +63,12 @@ class FirebaseService:
     
     def is_connected(self) -> bool:
         """Verificar se Firebase está conectado"""
+        logger.info("🔍 Conexão com Firebase: " + ("Ativa" if self.db else "Inativa"))
         return self.db is not None
     
     def check_connection(self) -> bool:
         """Verificar conexão com Firebase"""
+        logger.info("🔍 Verificando conexão com Firebase...")
         return self.is_connected()
     
     async def save_message(self, user_phone: str, message: str, direction: str, metadata: Dict = None) -> bool:

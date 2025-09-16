@@ -26,7 +26,7 @@ class PropertyIntelligenceService:
     def __init__(self):
         self.firebase_service = FirebaseService()
         self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.text_model = "llama3-8b-8192"  # Modelo de texto do Groq
+        self.text_model = "lllama-3.1-8b-instant"  # Modelo de texto do Groq
         self.property_cache = {}
         self.cache_expiry = timedelta(hours=6)
         self.last_cache_update = None

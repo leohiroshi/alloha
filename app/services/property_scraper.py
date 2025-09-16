@@ -29,7 +29,7 @@ class AllegaPropertyScraper:
     def __init__(self):
         self.base_url = "https://www.allegaimoveis.com"
         self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.text_model = "llama3-8b-8192"
+        self.text_model = "llama-3.1-8b-instant"
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class AIService:
     def __init__(self):
         self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.text_model = "llama3-8b-8192"  # Modelo de texto do Groq
+        self.text_model = "llama-3.1-8b-instant"  # Modelo de texto do Groq
         self.vision_model = "llama-3.2-11b-vision-preview"  # Modelo de visão do Groq
         self.conversation_context = {}
         self._property_intelligence = None

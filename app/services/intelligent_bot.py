@@ -27,7 +27,7 @@ class IntelligentRealEstateBot:
 
     def __init__(self):
         self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.text_model = "llama3-8b-8192"
+        self.text_model = "llama-3.1-8b-instant"
         self.vision_model = "llama-3.2-11b-vision-preview"
         self.bot_config = {
             'company_name': 'Allega Imóveis',
