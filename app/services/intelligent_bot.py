@@ -11,6 +11,8 @@ import aiohttp
 import base64
 import os
 from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 load_dotenv()
 
@@ -21,6 +23,12 @@ if not logger.hasHandlers():
     formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+
+# Inicialize o Firebase apenas uma vez (fora da classe)
+if not firebase_admin._apps:
+    cred = credentials.Certificate(os.getenv("FIREBASE_CREDENTIALS"))
+    firebase_admin.initialize_app(cred)
+db = firestore.client()
 
 class IntelligentRealEstateBot:
     """Bot inteligente especializado em imóveis usando Groq"""
@@ -43,6 +51,12 @@ class IntelligentRealEstateBot:
         """Processa mensagem do usuário com Groq"""
         try:
             logger.info(f"📨 Mensagem de {user_phone}: {message[:50]}...")
+
+            # Verificar se é busca de imóveis
+            if self._is_property_search(message):
+                property_response = await self.process_property_search(message)
+                if property_response and "não está disponível" not in property_response:
+                    return property_response
             
             prompt = self._build_prompt(message, user_phone)
             response = await self._call_groq(prompt)
@@ -116,7 +130,9 @@ class IntelligentRealEstateBot:
             f"2. Seja cordial, profissional e objetivo\n"
             f"3. Sempre ofereça agendamento de visitas quando apropriado\n"
             f"4. Para imagens enviadas, descreva o que vê e verifique se temos imóvel similar\n"
-            f"5. Quando não tiver informações específicas sobre um imóvel consultado, responda: 'No momento não tenho essa informação específica em nossa base. Posso conectá-lo com um de nossos corretores para mais detalhes?'\n\n"
+            f"5. Quando não tiver informações específicas sobre um imóvel consultado, responda: 'No momento não tenho essa informação específica em nossa base. Posso conectá-lo com um de nossos corretores para mais detalhes?'\n"
+            f"6. Limite de resposta de até 200 caracteres, sendo objetivo!\n"
+            f"7. Sempre que for falar de algum imóvel, enviar o link para cliente verificar no site da Allega Imóveis (https://allegaimoveis.com)!\n\n"
             f"EXEMPLOS DE RESPOSTAS:\n"
             f"- Para 'Tem casas no Bigorrilho?': 'Sim, temos várias opções no Bigorrilho! Gostaria de saber sobre casas para venda ou aluguel? Posso agendar uma visita com nossos corretores.'\n"
             f"- Para análise de imagem: 'Analisei a imagem que você enviou. Vi que é um apartamento de 2 quartos. Deixe-me verificar se temos opções similares disponíveis em nosso portfólio...'\n"
@@ -235,6 +251,45 @@ class IntelligentRealEstateBot:
                 "📞 *Ou entre em contato direto:*\n"
                 "🏠 Vendas: (41) 99214-6670\n"
                 "🏡 Locação: (41) 99223-0874"
+            )
+
+    async def process_property_search(self, user_query: str) -> str:
+        """
+        Busca imóveis no Firebase Firestore e retorna links para o comprador.
+        """
+        try:
+            # Exemplo: busca por palavra-chave no campo 'title' ou 'neighborhood'
+            properties_ref = db.collection("properties")
+            query = properties_ref.where("title", "is not", "null").limit(5)
+            results = []
+            for doc in query.stream():
+                data = doc.to_dict()
+                if (
+                    any(kw in data.get("title", "").lower() for kw in user_query.lower().split())
+                    or any(kw in data.get("neighborhood", "").lower() for kw in user_query.lower().split())
+                ):
+                    results.append(data)
+
+            if not results:
+                return (
+                    "😕 Não encontrei imóveis com essas características agora.\n"
+                    "Posso conectar você com um corretor para uma busca personalizada?"
+                )
+
+            response = "🏠 *Imóveis encontrados:*\n\n"
+            for prop in results:
+                response += (
+                    f"• *{prop.get('title', 'Imóvel')}* - {prop.get('price', 'Preço sob consulta')}\n"
+                    f"  [Ver detalhes]({prop.get('link', 'https://www.allegaimoveis.com')})\n\n"
+                )
+            response += "Gostaria de agendar uma visita ou saber mais sobre algum deles?"
+
+            return response
+        except Exception as e:
+            logger.error(f"Erro ao buscar imóveis no Firebase: {str(e)}")
+            return (
+                "😅 Tive um problema técnico ao buscar imóveis agora.\n"
+                "Por favor, tente novamente em instantes ou fale com um corretor."
             )
 
     def _is_property_search(self, message: str) -> bool:
