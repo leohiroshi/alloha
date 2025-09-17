@@ -103,10 +103,6 @@ class AllegaPropertyScraper:
                         property_data['ai_analysis'] = analysis[:250]
                         property_data['ai_enhanced'] = True
                         logger.info(f"Análise IA adicionada para: {property_data.get('title', '')[:30]}...")
-                    elif resp.status == 429:
-                        logger.warning("Groq API rate limit reached. Waiting 10 seconds before retrying...")
-                        await asyncio.sleep(10)
-                        # Opcional: tente novamente (recursivo ou com contador de tentativas)
                     else:
                         logger.warning(f"Groq API error: {resp.status}")
         except Exception as e:
@@ -527,7 +523,7 @@ class AllegaPropertyScraper:
             logger.info(f"Iniciando extração de {len(unique_links)} imóveis do tipo {property_type}")
             
             # Extrair detalhes de cada imóvel
-            semaphore = asyncio.Semaphore(3)  # Reduzido para 3 para não sobrecarregar
+            semaphore = asyncio.Semaphore(2)  # Reduzido para 3 para não sobrecarregar
             
             async def extract_with_semaphore(url):
                 async with semaphore:
