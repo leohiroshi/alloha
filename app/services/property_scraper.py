@@ -523,8 +523,8 @@ class AllegaPropertyScraper:
             logger.info(f"Iniciando extração de {len(unique_links)} imóveis do tipo {property_type}")
             
             # Extrair detalhes de cada imóvel
-            semaphore = asyncio.Semaphore(2)  # Reduzido para 3 para não sobrecarregar
-            
+            semaphore = asyncio.Semaphore(2)  # Reduzido para 2 para não sobrecarregar
+
             async def extract_with_semaphore(url):
                 async with semaphore:
                     return await self.extract_property_details(url, session)

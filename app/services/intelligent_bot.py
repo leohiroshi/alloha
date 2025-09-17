@@ -51,6 +51,8 @@ class IntelligentRealEstateBot:
         self.groq_api_key = os.getenv("GROQ_API_KEY")
         self.text_model = "llama-3.1-8b-instant"
         self.vision_model = "llama-3.2-11b-vision-preview"
+        self.max_concurrent_groq = int(os.getenv("MAX_CONCURRENT_GROQ", 2))
+        self.groq_semaphore = asyncio.Semaphore(self.max_concurrent_groq)
         self.bot_config = {
             'company_name': 'Allega Imóveis',
             'response_style': 'friendly_professional',
@@ -229,6 +231,8 @@ class IntelligentRealEstateBot:
                     if resp.status == 200:
                         result = await resp.json()
                         return result["choices"][0]["message"]["content"]
+                    elif resp.status == 429:
+                        return "😅 No momento atingimos o limite de uso da IA. Tente novamente mais tarde ou fale com um corretor."
                     else:
                         error_text = await resp.text()
                         logger.error(f"Erro Groq: {resp.status} - {error_text}")
@@ -369,22 +373,32 @@ class IntelligentRealEstateBot:
             "Authorization": f"Bearer {self.groq_api_key}",
             "Content-Type": "application/json"
         }
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post("https://api.groq.com/openai/v1/chat/completions", 
-                                    json=payload, headers=headers, 
-                                    timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        return result["choices"][0]["message"]["content"]
-                    else:
-                        error_text = await resp.text()
-                        logger.error(f"Erro Groq com histórico: {resp.status} - {error_text}")
-                        return "😅 Tive dificuldade técnica para responder no momento."
-        except Exception as e:
-            logger.error(f"Erro ao chamar Groq com histórico: {str(e)}")
-            return "😅 Tive dificuldade técnica para responder no momento."
+        retries = 3
+        delay = 5
+        async with self.groq_semaphore:
+            for attempt in range(retries):
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            "https://api.groq.com/openai/v1/chat/completions",
+                            json=payload, headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=30)
+                        ) as resp:
+                            if resp.status == 200:
+                                result = await resp.json()
+                                return result["choices"][0]["message"]["content"]
+                            elif resp.status == 429:
+                                logger.warning(f"Groq rate limit (429). Tentativa {attempt+1}/{retries}. Aguardando {delay} segundos.")
+                                await asyncio.sleep(delay)
+                                delay *= 2  # Exponencial
+                            else:
+                                error_text = await resp.text()
+                                logger.error(f"Erro Groq com histórico: {resp.status} - {error_text}")
+                                return "😅 Tive dificuldade técnica para responder no momento."
+                except Exception as e:
+                    logger.error(f"Erro ao chamar Groq com histórico: {str(e)}")
+                    await asyncio.sleep(delay)
+            return "😅 No momento atingimos o limite de uso da IA. Tente novamente mais tarde ou fale com um corretor."
 
 # Instância global do bot
 intelligent_bot = IntelligentRealEstateBot()
