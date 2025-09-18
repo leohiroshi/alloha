@@ -2,7 +2,7 @@
 Sistema de Extração Inteligente de Imóveis
 Executa o scraper a cada 30 minutos, compara imóveis do site com Firebase,
 adiciona, remove ou atualiza imóveis conforme necessário.
-Integrado com Groq para análise inteligente de dados.
+Integrado com Gemini para análise inteligente de dados.
 """
 
 import aiohttp
@@ -17,6 +17,7 @@ import os
 from datetime import datetime
 from app.services.firebase_service import FirebaseService
 from dotenv import load_dotenv
+import google.generativeai as genai
 
 load_dotenv()
 
@@ -24,12 +25,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class AllegaPropertyScraper:
-    """Extrator de imóveis do site Allega Imóveis com análise inteligente via Groq"""
+    """Extrator de imóveis do site Allega Imóveis com análise inteligente via Gemini"""
     
     def __init__(self):
         self.base_url = "https://www.allegaimoveis.com"
-        self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.text_model = "llama-3.1-8b-instant"
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        genai.configure(api_key=self.gemini_api_key)
+        self.model = genai.GenerativeModel("gemini-2.5-pro")
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -51,10 +53,10 @@ class AllegaPropertyScraper:
         
         # Tipos de transação
         self.transaction_types = ['venda', 'locacao', 'lancamento']
-    
-    async def enhance_property_with_groq(self, property_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Enriquece dados do imóvel usando análise inteligente do Groq"""
-        if not self.groq_api_key or not property_data.get('description'):
+
+    async def enhance_property_with_gemini(self, property_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Enriquece dados do imóvel usando análise inteligente do Gemini"""
+        if not self.gemini_api_key or not property_data.get('description'):
             return property_data
 
         system_prompt = (
@@ -75,44 +77,20 @@ class AllegaPropertyScraper:
         )
 
         try:
-            payload = {
-                "model": self.text_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "max_tokens": 300,
-                "temperature": 0.3
-            }
-
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions", 
-                    json=payload, 
-                    headers=headers, 
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        analysis = result["choices"][0]["message"]["content"].strip()
-                        property_data['ai_analysis'] = analysis[:250]
-                        property_data['ai_enhanced'] = True
-                        logger.info(f"Análise IA adicionada para: {property_data.get('title', '')[:30]}...")
-                    else:
-                        logger.warning(f"Groq API error: {resp.status}")
+            prompt = f"{system_prompt}\n\n{user_prompt}"
+            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            if response and hasattr(response, "text"):
+                analysis = response.text.strip()
+                property_data['ai_analysis'] = analysis[:250]
+                property_data['ai_enhanced'] = True
+                logger.info(f"Análise IA adicionada para: {property_data.get('title', '')[:30]}...")
         except Exception as e:
-            logger.error(f"Erro ao analisar imóvel com Groq: {str(e)}")
-        
+            logger.error(f"Erro ao analisar imóvel com Gemini: {str(e)}")
         return property_data
 
     async def generate_market_insights(self, properties: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Gera insights de mercado usando Groq"""
-        if not self.groq_api_key or not properties:
+        """Gera insights de mercado usando Gemini"""
+        if not self.gemini_api_key or not properties:
             return self._get_fallback_insights(properties)
 
         # Preparar dados para análise
@@ -128,12 +106,10 @@ class AllegaPropertyScraper:
             # Tipos
             prop_type = prop.get('property_type', 'unknown')
             summary_data['by_type'][prop_type] = summary_data['by_type'].get(prop_type, 0) + 1
-            
             # Bairros
             neighborhood = prop.get('neighborhood', '').strip()
             if neighborhood:
                 summary_data['by_neighborhood'][neighborhood] = summary_data['by_neighborhood'].get(neighborhood, 0) + 1
-            
             # Características
             summary_data['common_features'].extend(prop.get('features', []))
 
@@ -147,43 +123,21 @@ class AllegaPropertyScraper:
         user_prompt = f"Dados do mercado: {json.dumps(summary_data, ensure_ascii=False)[:1000]}"
 
         try:
-            payload = {
-                "model": self.text_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "max_tokens": 500,
-                "temperature": 0.4
-            }
-
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions", 
-                    json=payload, 
-                    headers=headers, 
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        insights = result["choices"][0]["message"]["content"].strip()
-                        return {
-                            'ai_insights': insights,
-                            'generated_at': datetime.now().isoformat(),
-                            'data_summary': summary_data
-                        }
+            prompt = f"{system_prompt}\n\n{user_prompt}"
+            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            if response and hasattr(response, "text"):
+                insights = response.text.strip()
+                return {
+                    'ai_insights': insights,
+                    'generated_at': datetime.now().isoformat(),
+                    'data_summary': summary_data
+                }
         except Exception as e:
-            logger.error(f"Erro ao gerar insights: {str(e)}")
-        
+            logger.error(f"Erro ao gerar insights com Gemini: {str(e)}")
         return self._get_fallback_insights(properties)
 
     def _get_fallback_insights(self, properties: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Insights padrão quando Groq não está disponível"""
+        """Insights padrão quando Gemini não está disponível"""
         total = len(properties)
         by_type = {}
         by_neighborhood = {}
@@ -452,7 +406,7 @@ class AllegaPropertyScraper:
                 }
 
                 # Enriquecer com análise da IA
-                property_data = await self.enhance_property_with_groq(property_data)
+                property_data = await self.enhance_property_with_gemini(property_data)
 
                 logger.info(f"Imóvel extraído: {property_data['title'][:50]}... Referência: {property_data['reference']}")
                 return property_data
@@ -585,7 +539,7 @@ class AllegaPropertyScraper:
             return None
     
     async def format_for_ai_training(self, properties: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Formata os dados para treinamento da IA com insights do Groq"""
+        """Formata os dados para treinamento da IA com insights do Gemini"""
         
         # Estatísticas gerais
         stats = {
@@ -630,7 +584,6 @@ class AllegaPropertyScraper:
             if prop.get('ai_enhanced'):
                 stats['ai_enhanced_count'] += 1
         
-        # Gerar insights de mercado usando Groq
         market_insights = await self.generate_market_insights(properties)
         
         # Criar base de conhecimento para IA

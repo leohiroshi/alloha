@@ -5,14 +5,15 @@ import re
 import base64
 from typing import Optional, Dict, Any
 from datetime import datetime
+import asyncio
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self):
-        self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.text_model = "llama-3.1-8b-instant"  # Modelo de texto do Groq
-        self.vision_model = "llama-3.2-11b-vision-preview"  # Modelo de visão do Groq
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        genai.configure(api_key=self.gemini_api_key)
         self.conversation_context = {}
         self._property_intelligence = None
 
@@ -27,6 +28,7 @@ class AIService:
             },
             "caracteristicas": ["quartos", "banheiros", "vagas", "area", "piscina", "churrasqueira"]
         }
+        self.model = genai.GenerativeModel("gemini-2.5-pro")  # Modelo de texto do Gemini
 
     @property
     def property_intelligence(self):
@@ -195,7 +197,8 @@ Contexto: {context_info}
 
 Responda oferecendo ajuda e pedindo mais detalhes específicos."""
                 
-                response = await self._call_groq(system_prompt, user_prompt)
+                prompt = f"{system_prompt}\n{user_prompt}"
+                response = await self.generate_text(prompt)
                 if response:
                     return response
                 else:
@@ -217,18 +220,17 @@ Responda oferecendo ajuda e pedindo mais detalhes específicos."""
         system_prompt = """Você é a Sofia, especialista em preços de imóveis da Allega Imóveis.
 Forneça informações realistas sobre faixas de preço em Curitiba e região metropolitana.
 Seja específico e útil. Máximo 300 caracteres."""
-        
-        response = await self._call_groq(system_prompt, f"Cliente pergunta sobre preços: {message}")
+        prompt = f"{system_prompt}\nCliente pergunta sobre preços: {message}"
+        response = await self.generate_text(prompt)
         if response:
             return response
-            
-        return """💰 Os preços variam conforme localização e características:
-
-• Apartamentos: R$ 150k - R$ 800k+
-• Casas: R$ 200k - R$ 1.5M+
-• Kitnets: R$ 80k - R$ 200k
-
-Que tipo de imóvel te interessa? Posso dar valores mais específicos!"""
+        return (
+            "💰 Os preços variam conforme localização e características:\n\n"
+            "• Apartamentos: R$ 150k - R$ 800k+\n"
+            "• Casas: R$ 200k - R$ 1.5M+\n"
+            "• Kitnets: R$ 80k - R$ 200k\n\n"
+            "Que tipo de imóvel te interessa? Posso dar valores mais específicos!"
+        )
 
     async def _handle_schedule_visit(self, message: str, intent: Dict, context: Dict) -> str:
         return """📅 Perfeito! Vamos agendar sua visita.
@@ -249,55 +251,47 @@ Qual imóvel gostaria de visitar?"""
     async def _handle_information_request(self, message: str, intent: Dict, context: Dict) -> str:
         system_prompt = """Você é a Sofia, consultora imobiliária da Allega Imóveis especialista em documentação e financiamento.
 Forneça informações práticas e úteis sobre o mercado imobiliário. Máximo 300 caracteres."""
-        
-        response = await self._call_groq(system_prompt, f"Cliente pergunta: {message}")
+        prompt = f"{system_prompt}\nCliente pergunta: {message}"
+        response = await self.generate_text(prompt)
         if response:
             return response
-            
-        return """📋 Posso ajudar com informações sobre:
-
-• Documentação necessária
-• Financiamento e FGTS
-• ITBI e custos extras
-• Processo de compra/venda
-
-📞 Contatos:
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-Sobre o que você gostaria de saber?"""
+        return (
+            "📋 Posso ajudar com informações sobre:\n\n"
+            "• Documentação necessária\n"
+            "• Financiamento e FGTS\n"
+            "• ITBI e custos extras\n"
+            "• Processo de compra/venda\n\n"
+            "📞 Contatos:\n"
+            "🏠 Vendas: (41) 99214-6670\n"
+            "🏡 Locação: (41) 99223-0874\n\n"
+            "Sobre o que você gostaria de saber?"
+        )
 
     async def _handle_general_inquiry(self, message: str, context: Dict) -> str:
         system_prompt = """Você é a Sofia, assistente da Allega Imóveis.
 Responda de forma amigável e direcione para serviços imobiliários.
 Máximo 250 caracteres."""
-        
-        response = await self._call_groq(system_prompt, f"Cliente pergunta: {message}")
+        prompt = f"{system_prompt}\nCliente pergunta: {message}"
+        response = await self.generate_text(prompt)
         if response:
             return response
-            
-        return f"""🤖 Entendi: \"{message}\"
-
-Como Sofia da Allega Imóveis, posso ajudar com:
-• Busca de apartamentos/casas
-• Informações de preços
-• Agendamento de visitas
-• Documentação
-
-📞 Contatos:
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-Como posso ajudá-lo hoje?"""
+        return (
+            f"🤖 Entendi: \"{message}\"\n\n"
+            "Como Sofia da Allega Imóveis, posso ajudar com:\n"
+            "• Busca de apartamentos/casas\n"
+            "• Informações de preços\n"
+            "• Agendamento de visitas\n"
+            "• Documentação\n\n"
+            "📞 Contatos:\n"
+            "🏠 Vendas: (41) 99214-6670\n"
+            "🏡 Locação: (41) 99223-0874\n\n"
+            "Como posso ajudá-lo hoje?"
+        )
 
     async def _handle_image_analysis(self, message: str, image_bytes: bytes) -> str:
         try:
-            if not self.groq_api_key:
-                return "😅 Sistema de análise de imagens temporariamente indisponível."
-            
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            
-            enhanced_prompt = (
+            prompt = (
                 f"Analise esta imagem de imóvel. Mensagem do usuário: {message}\n\n"
                 "Como Sofia da Allega Imóveis, identifique:\n"
                 "- Tipo de imóvel (casa, apartamento, terreno)\n"
@@ -308,119 +302,42 @@ Como posso ajudá-lo hoje?"""
                 "- Valor estimado se conseguir identificar\n\n"
                 "Seja específico e profissional na análise."
             )
-            
-            payload = {
-                "model": self.vision_model,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": enhanced_prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_b64}"
-                            }
-                        }
-                    ]
-                }],
-                "max_tokens": 1000,
-                "temperature": 0.3
-            }
-            
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions", 
-                    json=payload, 
-                    headers=headers, 
-                    timeout=aiohttp.ClientTimeout(total=60)
-                ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        llm_response = result["choices"][0]["message"]["content"]
-                        
-                       
-                        response = f"🏠 *Análise do Imóvel Concluída*\n\n{llm_response}\n\n"
-                        
-                    
-                        response += "💡 *Análise concluída pela Sofia da Allega Imóveis!*\n"
-                        response += "📞 *Quer mais informações?*\n"
-                        response += "🏠 Vendas: (41) 99214-6670\n"
-                        response += "🏡 Locação: (41) 99223-0874"
-                        
-                        return response
-                    else:
-                        error_data = await resp.json() if resp.content_type == 'application/json' else {}
-                        logger.error(f"Groq Vision API error: {resp.status} - {error_data}")
-                        return self._get_image_analysis_fallback()
-                        
+            # Gemini Vision API (google.generativeai) suporta imagens:
+            response = await asyncio.to_thread(self.model.generate_content, [
+                {"text": prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}}
+            ])
+            if response and hasattr(response, "text"):
+                return (
+                    f"🏠 *Análise do Imóvel Concluída*\n\n{response.text}\n\n"
+                    "💡 *Análise concluída pela Sofia da Allega Imóveis!*\n"
+                    "📞 *Quer mais informações?*\n"
+                    "🏠 Vendas: (41) 99214-6670\n"
+                    "🏡 Locação: (41) 99223-0874"
+                )
+            else:
+                return self._get_image_analysis_fallback()
         except Exception as e:
-            logger.error(f"Erro ao analisar imagem com Groq Vision: {e}")
+            logger.error(f"Erro ao analisar imagem com Gemini: {e}")
             return self._get_image_analysis_fallback()
 
     def _get_image_analysis_fallback(self) -> str:
         return """📸 Recebi sua imagem!
 
-😅 Tive dificuldade técnica para analisá-la no momento.
+                😅 Tive dificuldade técnica para analisá-la no momento.
 
-🏠 *Mas posso ajudar de outras formas:*
-• Descreva o imóvel que procura
-• Informe sua localização preferida
-• Conte sobre seu orçamento
+                🏠 *Mas posso ajudar de outras formas:*
+                • Descreva o imóvel que procura
+                • Informe sua localização preferida
+                • Conte sobre seu orçamento
 
-📞 *Ou entre em contato direto:*
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874"""
+                📞 *Ou entre em contato direto:*
+                🏠 Vendas: (41) 99214-6670
+                🏡 Locação: (41) 99223-0874"""
 
-    async def _call_groq(self, system_prompt: str, user_prompt: str) -> Optional[str]:
-        """Chama API do Groq para geração de texto"""
-        if not self.groq_api_key:
-            return None
-        
-        try:
-            payload = {
-                "model": self.text_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "max_tokens": 500,
-                "temperature": 0.3
-            }
-            
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions", 
-                    json=payload, 
-                    headers=headers, 
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        content = data["choices"][0]["message"]["content"].strip()
-                        return content[:400] if len(content) > 400 else content
-                    else:
-                        error_data = await response.json() if response.content_type == 'application/json' else {}
-                        logger.error(f"Groq API error: {response.status} - {error_data}")
-                        return None
-        except Exception as e:
-            logger.error(f"Error calling Groq API: {str(e)}")
-            return None
 
     def is_available(self) -> bool:
-        return bool(self.groq_api_key)
+        return True  # Always available since we are using Gemini
 
     async def get_property_suggestions(self, criteria: str, user_phone: str) -> str:
         try:
@@ -436,19 +353,6 @@ Histórico da conversa: {context.get('messages', [])}
 
 Sugira opções de imóveis adequadas."""
             
-            response = await self._call_groq(system_prompt, user_prompt)
-            if response:
-                return response
-                
-            return """🏠 Baseado no que você procura, temos ótimas opções!
-
-Vou conectar você com um de nossos corretores especializados que tem acesso ao nosso portfólio completo.
-
-📞 Contatos:
-🏠 Vendas: (41) 99214-6670
-🏡 Locação: (41) 99223-0874
-
-Quer agendar uma conversa?"""
         except Exception as e:
             logger.error(f"Error getting property suggestions: {str(e)}")
             return "Erro ao buscar sugestões. Tente novamente."
@@ -475,5 +379,16 @@ Quer agendar uma conversa?"""
             self.conversation_context.clear()
             logger.info("🗑️ Todo o cache de conversas foi limpo")
 
-            
+    async def generate_text(self, prompt: str) -> str:
+        """
+        Gera texto usando Gemini 2.5 Pro.
+        """
+        try:
+            # Gemini não é async, então use to_thread
+            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            return response.text.strip() if response and hasattr(response, "text") else ""
+        except Exception as e:
+            logger.error(f"Erro ao chamar Gemini: {str(e)}")
+            return "😅 Tive um problema técnico ao gerar a resposta. Tente novamente mais tarde."
+
 ai_service = AIService()

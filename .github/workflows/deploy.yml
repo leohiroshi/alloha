@@ -67,8 +67,8 @@ jobs:
                       value: "${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}"
                     - name: FIREBASE_CREDENTIALS
                       secretRef: firebase-credentials
-                    - name: GROQ_API_KEY
-                      secretRef: groq-api-key
+                    - name: GEMINI_API_KEY
+                      secretRef: gemini-api-key
                     - name: ENVIRONMENT
                       value: "production"
                     - name: HOST
@@ -90,7 +90,7 @@ jobs:
             --resource-group rg-alloha-prod \
             --secrets \
               firebase-credentials='${{ secrets.FIREBASE_CREDENTIALS }}' \
-              groq-api-key='${{ secrets.GROQ_API_KEY }}'
+              gemini-api-key='${{ secrets.GEMINI_API_KEY }}'
 
           # Deploy usando YAML
           az containerapp update \

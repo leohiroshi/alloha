@@ -1,6 +1,6 @@
 """
 Chatbot Inteligente para Análise de Imóveis
-Integra o PropertyImageAnalyzer com interface de chat usando Groq Vision
+Integra o PropertyImageAnalyzer com interface de chat usando Gemini Vision
 """
 
 import asyncio
@@ -15,6 +15,8 @@ import random
 import base64
 from dotenv import load_dotenv
 
+import google.generativeai as genai
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -22,20 +24,16 @@ logger = logging.getLogger(__name__)
 
 class PropertyImageAnalyzer:
     def __init__(self):
-        self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.groq_vision_model = "llama-3.2-11b-vision-preview"  # Modelo com visão do Groq
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        genai.configure(api_key=self.gemini_api_key)
+        self.model = genai.GenerativeModel("gemini-2.5-pro-vision")
 
     async def analyze_property_image(self, image_bytes: bytes, prompt: str = "Analyze this property image") -> dict:
         try:
-            logger.info(f"Analisando imagem ({len(image_bytes)} bytes) com Groq Vision")
-            
-            if not self.groq_api_key:
-                return {"success": False, "error": "Groq API key não configurada"}
-            
-            # Converter imagem para base64
+            logger.info(f"Analisando imagem ({len(image_bytes)} bytes) com Gemini Vision")
+            if not self.gemini_api_key:
+                return {"success": False, "error": "Gemini API key não configurada"}
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            
-            # Prompt específico para análise de imóveis
             enhanced_prompt = (
                 f"{prompt}\n\n"
                 "Analise esta imagem de imóvel e identifique:\n"
@@ -47,67 +45,26 @@ class PropertyImageAnalyzer:
                 "- Valor estimado se conseguir identificar\n\n"
                 "Seja específico e profissional na análise."
             )
-            
-            payload = {
-                "model": self.groq_vision_model,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": enhanced_prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_b64}"
-                            }
+            # Gemini Vision API (google.generativeai) suporta imagens:
+            response = await asyncio.to_thread(self.model.generate_content, [
+                {"text": enhanced_prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}}
+            ])
+            if response and hasattr(response, "text"):
+                llm_content = response.text
+                extracted_query = self._extract_query_from_llm(llm_content)
+                return {
+                    "success": True,
+                    "response": {
+                        "message": {
+                            "content": llm_content
                         }
-                    ]
-                }],
-                "max_tokens": 1000,
-                "temperature": 0.3
-            }
-            
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions", 
-                    json=payload, 
-                    headers=headers, 
-                    timeout=aiohttp.ClientTimeout(total=60)
-                ) as resp:
-                    text = await resp.text()
-                    logger.info(f"Resposta Groq Vision: status={resp.status}, body={text[:200]}")
-                    
-                    if resp.status == 200:
-                        result = await resp.json()
-                        llm_content = result["choices"][0]["message"]["content"]
-                        
-                        # Tenta extrair características do imóvel da resposta da IA
-                        extracted_query = self._extract_query_from_llm(llm_content)
-                        
-                        return {
-                            "success": True,
-                            "response": {
-                                "message": {
-                                    "content": llm_content
-                                }
-                            }
-                        }
-                    else:
-                        error_data = await resp.json() if resp.content_type == 'application/json' else {"error": text}
-                        return {
-                            "success": False, 
-                            "error": f"Groq API Error {resp.status}: {error_data.get('error', {}).get('message', text)}"
-                        }
-                        
+                    }
+                }
+            else:
+                return {"success": False, "error": "Gemini Vision não retornou resposta."}
         except Exception as e:
-            logger.error(f"Erro ao analisar imagem com Groq Vision: {e}")
+            logger.error(f"Erro ao analisar imagem com Gemini Vision: {e}")
             return {"success": False, "error": str(e)}
 
     def _extract_query_from_llm(self, llm_content: str) -> str:

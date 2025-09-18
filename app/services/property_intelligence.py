@@ -1,6 +1,6 @@
 """
 Serviço de Inteligência Imobiliária
-Integra dados de imóveis com a IA Groq para respostas inteligentes
+Integra dados de imóveis com a IA Gemini para respostas inteligentes
 """
 
 import json
@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import re
 import aiohttp
 from dotenv import load_dotenv
+import google.generativeai as genai
 
 load_dotenv()
 
@@ -21,12 +22,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PropertyIntelligenceService:
-    """Serviço que combina Groq com dados imobiliários"""
+    """Serviço que combina Gemini com dados imobiliários"""
 
     def __init__(self):
         self.firebase_service = FirebaseService()
-        self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.text_model = "lllama-3.1-8b-instant"  # Modelo de texto do Groq
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        genai.configure(api_key=self.gemini_api_key)
+        self.model = genai.GenerativeModel("gemini-2.5-pro")
         self.property_cache = {}
         self.cache_expiry = timedelta(hours=6)
         self.last_cache_update = None
@@ -343,7 +345,7 @@ class PropertyIntelligenceService:
         )
 
     async def process_property_inquiry(self, message: str, user_id: str) -> str:
-        """Processa consulta sobre imóveis usando Groq e o índice inteligente"""
+        """Processa consulta sobre imóveis usando Gemini e o índice inteligente"""
         try:
             await self.load_property_data()
             criteria = self.extract_search_criteria(message)
@@ -353,10 +355,10 @@ class PropertyIntelligenceService:
             await self.firebase_service.save_property_search(user_id, criteria, len(properties))
             response = self.format_property_response(properties, criteria)
 
-            # Chama Groq para enriquecer a resposta
-            groq_response = await self._call_groq_property_assistant(message, criteria, properties[:2])
-            if groq_response:
-                response += f"\n\n🤖 *Dica da Sofia:*\n{groq_response}"
+            # Chama Gemini para enriquecer a resposta
+            gemini_response = await self._call_gemini_property_assistant(message, criteria, properties[:2])
+            if gemini_response:
+                response += f"\n\n🤖 *Dica da Sofia:*\n{gemini_response}"
 
             return response
 
@@ -370,162 +372,57 @@ class PropertyIntelligenceService:
                 "Nossos especialistas vão te ajudar! 😊"
             )
 
-    async def _call_groq_property_assistant(self, message: str, criteria: Dict[str, Any], properties: List[Dict[str, Any]]) -> Optional[str]:
-        """Chama Groq para gerar dica ou resumo inteligente"""
-        if not self.groq_api_key:
-            return None
-
-        system_prompt = (
-            "Você é a Sofia, assistente virtual da Allega Imóveis. "
-            "Forneça dicas úteis, sugestões ou peça mais detalhes para ajudar o usuário a encontrar o imóvel ideal. "
-            "Seja amigável, profissional e objetiva. Máximo 200 caracteres."
-        )
-
-        user_prompt = (
-            f"Usuário perguntou: \"{message}\"\n"
-            f"Critérios extraídos: {json.dumps(criteria, ensure_ascii=False)}\n"
-            f"Imóveis encontrados: {len(properties)} resultados\n"
-            "Dê uma dica útil ou sugestão para ajudar na busca."
-        )
-
+    async def _call_gemini_property_assistant(self, message: str, criteria: Dict[str, Any], properties: List[Dict[str, Any]]) -> Optional[str]:
+        """Chama Gemini para gerar dica ou resumo inteligente"""
         try:
-            payload = {
-                "model": self.text_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "max_tokens": 300,
-                "temperature": 0.3
-            }
+            system_prompt = (
+                "Você é a Sofia, assistente virtual da Allega Imóveis. "
+                "Forneça dicas úteis, sugestões ou peça mais detalhes para ajudar o usuário a encontrar o imóvel ideal. "
+                "Seja amigável, profissional e objetiva. Máximo 200 caracteres."
+            )
 
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
+            user_prompt = (
+                f"Usuário perguntou: \"{message}\"\n"
+                f"Critérios extraídos: {json.dumps(criteria, ensure_ascii=False)}\n"
+                f"Imóveis encontrados: {len(properties)} resultados\n"
+                "Dê uma dica útil ou sugestão para ajudar na busca."
+            )
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions", 
-                    json=payload, 
-                    headers=headers, 
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        content = result["choices"][0]["message"]["content"].strip()
-                        return content[:250] if len(content) > 250 else content
-                    else:
-                        logger.error(f"Groq API error: {resp.status}")
-                        return None
+            prompt = f"{system_prompt}\n\n{user_prompt}\nSofia:"
+
+            # Gemini não é async, então use to_thread
+            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            return response.text.strip()[:250] if response and hasattr(response, "text") else None
         except Exception as e:
-            logger.error(f"Erro ao chamar Groq: {str(e)}")
+            logger.error(f"Erro ao chamar Gemini: {str(e)}")
             return None
-
-    def get_market_insights(self) -> str:
-        """Retorna insights do mercado baseado nos dados"""
-        if not self.property_cache or 'statistics' not in self.property_cache:
-            return "📊 Dados de mercado em atualização..."
-
-        stats = self.property_cache['statistics']
-
-        response = "📊 *Insights do Mercado Imobiliário*\n\n"
-        response += f"🏠 *Total de imóveis:* {stats.get('total_properties', 0)}\n\n"
-
-        if 'by_type' in stats:
-            response += "*Tipos mais procurados:*\n"
-            for prop_type, count in sorted(stats['by_type'].items(),
-                                         key=lambda x: x[1], reverse=True)[:3]:
-                response += f"• {prop_type.title()}: {count} imóveis\n"
-            response += "\n"
-
-        if 'by_transaction' in stats:
-            response += "*Modalidades:*\n"
-            for trans_type, count in stats['by_transaction'].items():
-                response += f"• {trans_type.title()}: {count} imóveis\n"
-            response += "\n"
-
-        response += "💡 *Dica:* Entre em contato para uma análise personalizada do mercado!\n\n"
-        response += self._add_contact_info()
-
-        return response
-
-    async def update_property_data(self, new_data: Dict[str, Any]) -> bool:
-        """Atualiza dados de imóveis no sistema"""
-        try:
-            success = await self.firebase_service.save_property_data(new_data)
-            if success:
-                self.property_cache = new_data
-                self.last_cache_update = datetime.now()
-                logger.info("Dados de imóveis atualizados com sucesso")
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Erro ao atualizar dados de imóveis: {str(e)}")
-            return False
-
-    def is_property_related(self, message: str) -> bool:
-        """Verifica se a mensagem é relacionada a imóveis"""
-        property_keywords = [
-            'apartamento', 'casa', 'imóvel', 'imovel', 'comprar', 'vender',
-            'alugar', 'aluguel', 'locação', 'locacao', 'venda', 'terreno',
-            'sobrado', 'cobertura', 'quarto', 'dormitório', 'garagem',
-            'curitiba', 'bigorrilho', 'champagnat', 'batel', 'água verde',
-            'preço', 'preco', 'financiamento', 'fgts', 'investimento'
-        ]
-        message_lower = message.lower()
-        return any(keyword in message_lower for keyword in property_keywords)
 
     async def get_property_recommendations(self, user_preferences: Dict[str, Any]) -> str:
-        """Gera recomendações personalizadas usando Groq"""
-        if not self.groq_api_key:
-            return self._get_fallback_recommendations()
-
-        system_prompt = (
-            "Você é a Sofia da Allega Imóveis. "
-            "Com base nas preferências do usuário, sugira tipos de imóveis e bairros em Curitiba. "
-            "Seja específica e útil. Máximo 300 caracteres."
-        )
-
-        user_prompt = f"Preferências do usuário: {json.dumps(user_preferences, ensure_ascii=False)}"
-
+        """Gera recomendações personalizadas usando Gemini"""
         try:
-            payload = {
-                "model": self.text_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "max_tokens": 400,
-                "temperature": 0.4
-            }
+            system_prompt = (
+                "Você é a Sofia da Allega Imóveis. "
+                "Com base nas preferências do usuário, sugira tipos de imóveis e bairros em Curitiba. "
+                "Seja específica e útil. Máximo 300 caracteres."
+            )
 
-            headers = {
-                "Authorization": f"Bearer {self.groq_api_key}",
-                "Content-Type": "application/json"
-            }
+            user_prompt = f"Preferências do usuário: {json.dumps(user_preferences, ensure_ascii=False)}"
+            prompt = f"{system_prompt}\n\n{user_prompt}\nSofia:"
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions", 
-                    json=payload, 
-                    headers=headers, 
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        content = result["choices"][0]["message"]["content"].strip()
-                        return f"💡 *Recomendações da Sofia:*\n{content}\n\n{self._add_contact_info()}"
-                    else:
-                        return self._get_fallback_recommendations()
+            response = await asyncio.to_thread(self.model.generate_content, prompt)
+            content = response.text.strip() if response and hasattr(response, "text") else None
+            if content:
+                return f"💡 *Recomendações da Sofia:*\n{content}\n\n{self._add_contact_info()}"
+            else:
+                return self._get_fallback_recommendations()
         except Exception as e:
             logger.error(f"Erro ao gerar recomendações: {str(e)}")
             return self._get_fallback_recommendations()
 
     def _get_fallback_recommendations(self) -> str:
-        """Recomendações padrão quando Groq não está disponível"""
+        """Recomendações padrão da Sofia (Gemini)"""
         return (
-            "💡 *Recomendações da Allega Imóveis:*\n\n"
+            "💡 *Recomendações da Sofia:*\n\n"
             "🏠 Para famílias: Casas no Champagnat ou Batel\n"
             "🏢 Para investimento: Apartamentos no Centro\n"
             "🌳 Para tranquilidade: Bigorrilho ou Água Verde\n\n"
