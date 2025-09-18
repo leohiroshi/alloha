@@ -345,7 +345,7 @@ class IntelligentRealEstateBot:
         try:
             # Exemplo: busca por palavra-chave no campo 'title' ou 'neighborhood'
             properties_ref = db.collection("properties")
-            query = properties_ref.where("title", "!=", None).limit(5)
+            query = properties_ref.where("title", "!=", "").limit(5)
             results = []
             for doc in query.stream():
                 data = doc.to_dict()
