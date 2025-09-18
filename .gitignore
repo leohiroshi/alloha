@@ -86,3 +86,5 @@ logs/
 # Azure specific
 .azure/
 *.zip
+clear_messages.py
+alloha-credentials.json

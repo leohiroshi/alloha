@@ -95,6 +95,22 @@ class IntelligentRealEstateBot:
             # Adiciona a mensagem atual do usuário ao histórico
             history.append({"role": "user", "content": message})
 
+            # --- NOVO: verifica se é busca de imóvel ---
+            if self._is_property_search(message):
+                property_response = await self.process_property_search(message)
+                # Se encontrou imóveis, retorna a resposta e salva no Firestore
+                if property_response and "não encontrei" not in property_response.lower():
+                    db.collection("messages").add({
+                        "user_phone": user_phone,
+                        "message": property_response,
+                        "direction": "sent",
+                        "timestamp": datetime.utcnow(),
+                        "metadata": {}
+                    })
+                    logger.info(f"✅ Resposta de imóveis enviada para {user_phone}")
+                    return property_response
+            # --- FIM NOVO ---
+
             # Prompt inicial só se for o início da conversa
             if len(history) == 1:
                 system_prompt = self._build_prompt("", user_phone)
@@ -154,7 +170,7 @@ class IntelligentRealEstateBot:
                 "🏡 Locação: (41) 99223-0874"
             )
 
-    def _build_prompt(self, message: str, user_phone: str) -> str:
+    '''def _build_prompt(self, message: str, user_phone: str) -> str:
         """Constrói o prompt para o Groq"""
         return (
             f"Você é a Sofia, assistente virtual para a imobiliária Allega Imóveis, que atende clientes via WhatsApp, fornecendo informações detalhadas e precisas sobre imóveis disponíveis exclusivamente na região de Curitiba e região metropolitana. Seu principal objetivo é ajudar leads a:\n\n"
@@ -190,6 +206,22 @@ class IntelligentRealEstateBot:
             f"- Para agendamento: 'Fico feliz em saber do seu interesse! Posso agendar uma visita com um dos nossos corretores. Qual seria o melhor dia e horário para você?' e sugira três horários nos próximos dias de acordo com agenda do corretor.\n\n"
             f"Usuário ({user_phone}) enviou: \"{message}\"\n\n"
             f"Responda como Sofia, seguindo todas as regras acima."
+        )'''
+    
+    def _build_prompt(self, message: str, user_phone: str) -> str:
+        """Constrói o prompt para o Groq"""
+        return (
+            "Você é Sofia, assistente virtual da Allega Imóveis, especializada em imóveis de Curitiba e região metropolitana. "
+            "Seu papel é responder clientes via WhatsApp de forma cordial, profissional e objetiva, sempre se apresentando como Sofia. "
+            "Responda apenas com informações do banco de dados da Allega Imóveis (https://www.allegaimoveis.com). "
+            "Se não souber a resposta, ofereça contato com um corretor. "
+            "Sempre que falar de um imóvel, envie o link correspondente do site. "
+            "Nunca diga que é uma IA, sempre diga que é Sofia. "
+            "Use linguagem clara, humana e formal, adequada ao setor imobiliário. "
+            "Limite suas respostas a até 200 caracteres, sendo objetiva. "
+            "Exemplo: 'Olá, sou Sofia, a assistente virtual da Allega Imóveis! Temos casas no Bigorrilho. Gostaria de agendar uma visita?'\n\n"
+            f"Usuário ({user_phone}) enviou: \"{message}\"\n\n"
+            "Responda como Sofia, seguindo todas as regras acima."
         )
 
     def _build_image_prompt(self, caption: str, user_phone: str) -> str:
