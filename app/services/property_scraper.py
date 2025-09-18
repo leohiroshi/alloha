@@ -246,9 +246,8 @@ class AllegaPropertyScraper:
                     'conservation_state': '',# Estado de conservação
                     'year_built': '', # Ano de construção
                     'occupation': '', # Ocupação
-                    'rent_gross': '', # Aluguel Bruto
+                    'price': '', # Preço
                     'bonus': '',      # Bonificação
-                    'rent_net': '',   # Aluguel Líquido
                     'iptu': '',       # IPTU
                     'iptu_period': '',# IPTU período
                     'composition': [],# Composição (lista de cômodos e diferenciais)
@@ -378,20 +377,20 @@ class AllegaPropertyScraper:
                 if ocupacao_match:
                     property_data['occupation'] = ocupacao_match.group(1).strip()
 
-                # Aluguel Bruto
-                aluguel_bruto_match = re.search(r'Aluguel Bruto[:\s]*R?\$?\s*([\d.,]+)', html, re.IGNORECASE)
-                if aluguel_bruto_match:
-                    property_data['rent_gross'] = aluguel_bruto_match.group(1)
+                # Preço
+                valor_elem = soup.find(class_=re.compile(r'valor', re.IGNORECASE))
+                if valor_elem:
+                    property_data['price'] = valor_elem.get_text(strip=True)
+                else:
+                    # fallback: busca pelo texto "Valor:" no HTML
+                    valor_match = re.search(r'Valor[:\s]*R?\$?\s*([\d\.,]+)', html, re.IGNORECASE)
+                    if valor_match:
+                        property_data['price'] = f"R$ {valor_match.group(1)}"
 
                 # Bonificação
                 bonificacao_match = re.search(r'Bonifica[çc][ãa]o[:\s]*R?\$?\s*([\d.,]+)', html, re.IGNORECASE)
                 if bonificacao_match:
                     property_data['bonus'] = bonificacao_match.group(1)
-
-                # Aluguel Líquido
-                aluguel_liquido_match = re.search(r'Aluguel Líquido[:\s]*R?\$?\s*([\d.,]+)', html, re.IGNORECASE)
-                if aluguel_liquido_match:
-                    property_data['rent_net'] = aluguel_liquido_match.group(1)
 
                 # IPTU
                 iptu_match = re.search(r'IPTU[:\s]*R?\$?\s*([\d.,]+)', html, re.IGNORECASE)
