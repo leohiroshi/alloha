@@ -365,7 +365,7 @@ class IntelligentRealEstateBot:
             for prop in results:
                 response += (
                     f"• *{prop.get('title', 'Imóvel')}* - {prop.get('price', 'Preço sob consulta')}\n"
-                    f"  [Ver detalhes]({prop.get('link', 'https://www.allegaimoveis.com')})\n\n"
+                    f"  [Ver detalhes]({prop.get('url', 'https://www.allegaimoveis.com')})\n\n"
                 )
             response += "Gostaria de agendar uma visita ou saber mais sobre algum deles?"
 
