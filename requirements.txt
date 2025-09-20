@@ -33,3 +33,6 @@ colorlog==6.8.0
 
 # Environment variables
 python-decouple==3.8
+
+# Gemini/Google Generative AI
+google-generativeai>=0.3.2
