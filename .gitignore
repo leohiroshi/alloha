@@ -86,5 +86,9 @@ logs/
 # Azure specific
 .azure/
 *.zip
+
+#Others
 clear_messages.py
 alloha-credentials.json
+unsloth.Q8_0.gguf
+Modelfile
