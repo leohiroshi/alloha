@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from .firebase_service import FirebaseService
-from rag_pipeline import call_gpt, build_prompt, retrieve
+from app.services.rag_pipeline import call_gpt, build_prompt, retrieve
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

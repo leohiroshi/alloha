@@ -15,7 +15,7 @@ import json
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, firestore
-from rag_pipeline import call_gpt, retrieve, build_prompt
+from app.services.rag_pipeline import call_gpt, retrieve, build_prompt
 
 load_dotenv()
 

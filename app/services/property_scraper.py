@@ -28,7 +28,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 # internal services
 from app.services.firebase_service import FirebaseService
-from rag_pipeline import call_gpt
+from app.services.rag_pipeline import call_gpt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

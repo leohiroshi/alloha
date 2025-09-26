@@ -12,7 +12,7 @@ from app.services.intelligent_bot import intelligent_bot
 from app.services.property_intelligence import property_intelligence
 from app.services.firebase_service import firebase_service
 from app.services.property_scraper import monitor_scraper
-from rag_pipeline import retrieve, build_prompt, call_gpt
+from app.services.rag_pipeline import retrieve, build_prompt, call_gpt
 import asyncio
 
 # Configurar logging

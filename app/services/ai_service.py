@@ -6,7 +6,7 @@ import base64
 from typing import Optional, Dict, Any
 from datetime import datetime
 import asyncio
-from rag_pipeline import call_gpt, retrieve, build_prompt
+from app.services.rag_pipeline import call_gpt, retrieve, build_prompt
 
 logger = logging.getLogger(__name__)
 

@@ -14,7 +14,7 @@ import socket
 import random
 import base64
 from dotenv import load_dotenv
-from rag_pipeline import call_gpt
+from app.services.rag_pipeline import call_gpt
 
 load_dotenv()
 
