@@ -1,7 +1,7 @@
 # Alloha.app - AI Chat System for Real Estate
 # Dockerfile for Azure Container Apps deployment
 
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # Build args
 ARG INSTALL_BROWSER=false
