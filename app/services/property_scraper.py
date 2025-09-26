@@ -10,6 +10,7 @@ import json
 import os
 import re
 import tempfile
+import uuid
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -29,6 +30,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # internal services
 from app.services.firebase_service import FirebaseService
 from app.services.rag_pipeline import call_gpt
+from app.services.intelligent_bot import intelligent_bot
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -234,6 +236,22 @@ class AllegaPropertyScraper:
             if resp:
                 property_data['ai_analysis'] = resp.strip()[:250]
                 property_data['ai_enhanced'] = True
+
+                # --- novo: salvar metadados de embedding no Firestore via intelligent_bot ---
+                try:
+                    doc_id = property_data.get('reference') or property_data.get('url') or f"prop-{uuid.uuid4().hex[:8]}"
+                    vector_id = f"vec-{uuid.uuid4().hex}"
+                    embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+                    meta = {
+                        "source": "scraper",
+                        "url": property_data.get("url"),
+                        "title": property_data.get("title"),
+                        "neighborhood": property_data.get("neighborhood")
+                    }
+                    # intelligent_bot._save_embedding_meta é async — aguardar a gravação
+                    await intelligent_bot._save_embedding_meta(doc_id=doc_id, vector_id=vector_id, model=embedding_model, meta=meta)
+                except Exception as e_save:
+                    logger.debug(f"Falha ao salvar metadata de embedding: {e_save}")
         except Exception as e:
             logger.error(f"Erro ao enriquecer imóvel com GPT: {e}")
         return property_data

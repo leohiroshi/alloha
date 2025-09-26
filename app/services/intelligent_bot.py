@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, firestore
 from app.services.rag_pipeline import call_gpt, retrieve, build_prompt
+from app.services.property_intelligence import property_intelligence
 
 load_dotenv()
 
@@ -62,19 +63,22 @@ class IntelligentRealEstateBot:
         }
         logger.info("Bot de Inteligência Imobiliária iniciado")
 
-    async def get_conversation_history(self, user_phone, limit=10) -> List[Dict[str, str]]:
-        """
-        Busca as últimas mensagens do usuário e do bot no Firestore para manter o contexto da conversa.
-        """
+    def _get_conversation_history_sync(self, user_phone, limit=10) -> List[Dict[str, str]]:
+        """Sincrono: busca mensagens no Firestore (para ser executado em thread)."""
         messages_ref = db.collection("messages")
         query = messages_ref.where("user_phone", "==", user_phone).order_by("timestamp", direction=firestore.Query.DESCENDING).limit(limit)
-        docs = query.stream()
+        docs = list(query.stream())
         history = []
         for d in docs:
-            rec = d.to_dict()
+            rec = d.to_dict() or {}
             role = "user" if rec.get("direction") == "received" else "assistant"
             history.append({"role": role, "content": rec.get("message", "")})
+        # retorna em ordem cronológica (mais antiga → mais recente)
         return list(reversed(history))
+
+    async def get_conversation_history(self, user_phone, limit=10) -> List[Dict[str, str]]:
+        """Async wrapper que executa a busca síncrona em thread para não bloquear o loop."""
+        return await asyncio.to_thread(self._get_conversation_history_sync, user_phone, limit)
 
     async def process_message(self, message: str, user_phone: str) -> str:
         """
@@ -82,10 +86,33 @@ class IntelligentRealEstateBot:
         """
         try:
             logger.info(f"📨 Mensagem de {user_phone}: {message[:100]}")
+            # salve msg recebida imediatamente
+            db.collection("messages").add({
+                "user_phone": user_phone,
+                "message": message,
+                "direction": "received",
+                "timestamp": datetime.utcnow(),
+                "metadata": {}
+            })
+
             history = await self.get_conversation_history(user_phone, limit=10)
+
+            # tente extrair perfil/entidades do usuário via LLM (async wrapper)
+            try:
+                profile = await self._extract_profile_with_gpt(message, user_phone, history)
+                if profile:
+                    await self._upsert_user_profile(user_phone, profile)
+            except Exception:
+                logger.debug("Perfil não extraído ou erro silencioso")
 
             # Detecta busca de imóvel
             if self._is_property_search(message) and self.bot_config.get("enable_property_search", True):
+                # extraia critérios e salve busca
+                try:
+                    criteria = property_intelligence.extract_search_criteria(message)
+                except Exception:
+                    criteria = {}
+                await self._save_property_search(user_phone, message, criteria)
                 property_response = await self.process_property_search(message)
                 # salva resposta no Firestore
                 db.collection("messages").add({
@@ -99,7 +126,7 @@ class IntelligentRealEstateBot:
 
             # Para conversas gerais, usa GPT (via call_gpt)
             prompt = self._build_prompt(message, user_phone)
-            full_history = [{"role": h["role"], "content": h["content"]} for h in history] + [{"role":"user","content":message}]
+            full_history = [{"role": h["role"], "content": h["content"]} for h in history] + [{"role": "user", "content": message}]
             prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in full_history])
 
             model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
@@ -178,6 +205,76 @@ class IntelligentRealEstateBot:
         except Exception as e:
             logger.exception(f"Erro ao chamar Sofia: {str(e)}")
             return "😅 Tive dificuldade técnica para responder no momento. Por favor, tente novamente em instantes."
+
+    async def _extract_profile_with_gpt(self, message: str, user_phone: str, history: List[Dict[str,str]]) -> dict:
+        """Chama LLM para extrair um JSON com campos de perfil/requisitos do usuário."""
+        try:
+            system = (
+                "Você é um assistente que extrai informações estruturadas de mensagens de clientes. "
+                "Retorne apenas um JSON válido com campos opcionais: name, email, phone, transaction_type, "
+                "budget_min, budget_max, preferred_neighborhoods (lista), bedrooms (int), contact_time (string)."
+            )
+            example = {
+                "name": "Maria Silva",
+                "email": "maria@example.com",
+                "phone": user_phone,
+                "transaction_type": "locacao",
+                "budget_min": None,
+                "budget_max": 2000,
+                "preferred_neighborhoods": ["Água Verde"],
+                "bedrooms": 2,
+                "contact_time": "tarde"
+            }
+            prompt = (
+                f"{system}\n\nCONTEXT HISTORY:\n"
+                + "\n".join([f"{h['role']}: {h['content']}" for h in history])
+                + f"\n\nMESSAGE:\n{message}\n\nReturn JSON example:\n{json.dumps(example, ensure_ascii=False)}\n\nJSON:"
+            )
+            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            resp = await asyncio.to_thread(call_gpt, prompt, model)
+            if not resp:
+                return {}
+            # tentar extrair JSON bruto do texto
+            start = resp.find("{")
+            end = resp.rfind("}") + 1
+            json_text = resp[start:end] if start != -1 and end != -1 else resp
+            data = json.loads(json_text)
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.debug(f"Falha extrair perfil: {e}")
+            return {}
+
+    async def _upsert_user_profile(self, user_phone: str, profile: dict):
+        """Atualiza/insere documento do usuário com os dados extraídos."""
+        try:
+            if not profile:
+                return
+            doc_ref = db.collection("users").document(user_phone)
+            # normalize basic keys
+            to_save = {}
+            for k in ["name", "email", "phone", "transaction_type", "budget_min", "budget_max", "preferred_neighborhoods", "bedrooms", "contact_time"]:
+                if k in profile and profile[k] not in (None, "", []):
+                    to_save[k] = profile[k]
+            to_save["last_seen"] = datetime.utcnow()
+            doc_ref.set(to_save, merge=True)
+            logger.info(f"Perfil atualizado para {user_phone}: {list(to_save.keys())}")
+        except Exception as e:
+            logger.debug(f"Erro upsert user profile: {e}")
+
+    async def _save_property_search(self, user_phone: str, query: str, criteria: dict):
+        """Salva histórico de buscas do usuário em property_searches."""
+        try:
+            coll = db.collection("property_searches")
+            doc = {
+                "user_phone": user_phone,
+                "query": query,
+                "criteria": criteria or {},
+                "timestamp": datetime.utcnow()
+            }
+            coll.add(doc)
+            logger.info(f"Property search saved for {user_phone}")
+        except Exception as e:
+            logger.debug(f"Erro salvar property_search: {e}")
 
     async def process_property_search(self, user_query: str) -> str:
         """
@@ -263,6 +360,53 @@ class IntelligentRealEstateBot:
         except Exception as e:
             logger.exception(f"Erro visão Sofia (OpenAI): {e}")
             return "📸 Não foi possível analisar a imagem agora. Tente novamente mais tarde."
+
+    async def _save_attachment(self, owner_phone: str, storage_url: str, content_type: str, size: int, message_id: str = None, meta: dict = None):
+        """Salvar metadados de attachments no Firestore (executa em thread)."""
+        try:
+            doc = {
+                "attachment_id": storage_url.split("/")[-1],
+                "owner_phone": owner_phone,
+                "storage_url": storage_url,
+                "content_type": content_type,
+                "size": size,
+                "message_id": message_id,
+                "meta": meta or {},
+                "uploaded_at": datetime.utcnow()
+            }
+            await asyncio.to_thread(db.collection("attachments").document(doc["attachment_id"]).set, doc)
+            logger.info(f"Attachment salvo: {doc['attachment_id']}")
+        except Exception as e:
+            logger.debug(f"Erro salvar attachment: {e}")
+
+    async def _save_audit(self, action: str, actor: str = "system", details: dict | None = None):
+        """Registra auditoria de ações críticas."""
+        try:
+            doc = {
+                "action": action,
+                "actor": actor,
+                "timestamp": datetime.utcnow(),
+                "details": details or {}
+            }
+            await asyncio.to_thread(db.collection("audits").add, doc)
+            logger.info(f"Audit registrado: {action}")
+        except Exception as e:
+            logger.debug(f"Erro salvar audit: {e}")
+
+    async def _save_embedding_meta(self, doc_id: str, vector_id: str, model: str, meta: dict | None = None):
+        """Salva metadados de embeddings (vetores são guardados no vector DB)."""
+        try:
+            doc = {
+                "doc_id": doc_id,
+                "vector_id": vector_id,
+                "model": model,
+                "meta": meta or {},
+                "created_at": datetime.utcnow()
+            }
+            await asyncio.to_thread(db.collection("embeddings").document(vector_id).set, doc)
+            logger.info(f"Embedding meta salvo: {vector_id}")
+        except Exception as e:
+            logger.debug(f"Erro salvar embedding meta: {e}")
 
 # Instância global do bot
 intelligent_bot = IntelligentRealEstateBot()

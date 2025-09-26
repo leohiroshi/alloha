@@ -96,3 +96,4 @@ importproperties.py
 webscraping.py
 sofia_training_data.jsonl
 allega_imoveis_selenium.csv
+scripts/restore_firestore_schema.py
