@@ -15,7 +15,6 @@ import subprocess
 import shlex
 import openai
 import time
-from chromadb.errors import InvalidArgumentError
 
 # ---------- CONFIG ----------
 FIRESTORE_KEY = r"C:\Hrsh\dev\alloha\alloha-credentials.json"
@@ -143,18 +142,20 @@ def retrieve(query: str, top_k=TOP_K, filters: dict=None):
         q_emb = _encode_text(query)
         # Chroma query
         res = collection.query(query_embeddings=[q_emb], n_results=top_k, include=["documents", "metadatas", "distances"])
-    except InvalidArgumentError as e:
-        logger.exception("Erro no retrieve (embedding dimension mismatch). Tentando fallback local embeddings.")
-        # Fallback: se está configurado para usar OpenAI embeddings, tente usar o embedding local (SentenceTransformer)
-        try:
-            fallback_emb = embed_model.encode(query).tolist()
-            res = collection.query(query_embeddings=[fallback_emb], n_results=top_k, include=["documents", "metadatas", "distances"])
-        except Exception as e2:
-            logger.exception("Fallback do retrieve falhou: %s", e2)
-            return []
     except Exception as e:
-        logger.exception("Erro no retrieve: %s", e)
-        return []
+        # Tentativa de detectar mismatch de dimensão/embedding e aplicar fallback local
+        msg = str(e).lower()
+        if any(token in msg for token in ("dimension", "embedding", "shape", "mismatch")):
+            logger.exception("Erro no retrieve (possível mismatch de dimensão). Tentando fallback local embeddings.")
+            try:
+                fallback_emb = embed_model.encode(query).tolist()
+                res = collection.query(query_embeddings=[fallback_emb], n_results=top_k, include=["documents", "metadatas", "distances"])
+            except Exception as e2:
+                logger.exception("Fallback do retrieve falhou: %s", e2)
+                return []
+        else:
+            logger.exception("Erro no retrieve: %s", e)
+            return []
 
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
