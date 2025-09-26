@@ -1,6 +1,6 @@
 """
 Chatbot Inteligente para Análise de Imóveis
-Integra o PropertyImageAnalyzer com interface de chat usando Gemini Vision
+Integra o PropertyImageAnalyzer com interface de chat
 """
 
 import asyncio
@@ -14,8 +14,7 @@ import socket
 import random
 import base64
 from dotenv import load_dotenv
-
-import google.generativeai as genai
+from rag_pipeline import call_gpt
 
 load_dotenv()
 
@@ -24,47 +23,48 @@ logger = logging.getLogger(__name__)
 
 class PropertyImageAnalyzer:
     def __init__(self):
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
-        genai.configure(api_key=self.gemini_api_key)
-        self.model = genai.GenerativeModel("gemini-2.5-pro-vision")
+        # Nome do modelo GPT/OpenAI
+        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
     async def analyze_property_image(self, image_bytes: bytes, prompt: str = "Analyze this property image") -> dict:
+        """
+        Converte a imagem para base64 e envia um prompt para o modelo GPT/OpenAI (via call_gpt).
+        Observação: enviar base64 como texto pode ser pesado — prefira compressão ou gerar legendas locais.
+        """
         try:
-            logger.info(f"Analisando imagem ({len(image_bytes)} bytes) com Gemini Vision")
-            if not self.gemini_api_key:
-                return {"success": False, "error": "Gemini API key não configurada"}
+            logger.info(f"Analisando imagem ({len(image_bytes)} bytes) com GPT/OpenAI")
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
             enhanced_prompt = (
                 f"{prompt}\n\n"
-                "Analise esta imagem de imóvel e identifique:\n"
+                "Analise esta imagem de imóvel (base64 abaixo) e identifique:\n"
                 "- Tipo de imóvel (casa, apartamento, terreno)\n"
                 "- Características visíveis (quartos, banheiros, garagem)\n"
                 "- Estado de conservação\n"
                 "- Localização aproximada se possível\n"
                 "- Diferenciais e pontos de destaque\n"
-                "- Valor estimado se conseguir identificar\n\n"
-                "Seja específico e profissional na análise."
+                "- Valor estimado se possível\n\n"
+                "Base64 da imagem (separado por tags):\n"
+                f"---BEGIN_IMAGE_BASE64---\n{image_b64}\n---END_IMAGE_BASE64---\n\n"
+                "Seja específico e profissional na análise. Resuma em até 300 caracteres."
             )
-            # Gemini Vision API (google.generativeai) suporta imagens:
-            response = await asyncio.to_thread(self.model.generate_content, [
-                {"text": enhanced_prompt},
-                {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}}
-            ])
-            if response and hasattr(response, "text"):
-                llm_content = response.text
+
+            # call_gpt é bloqueante; executar em thread
+            llm_content = await asyncio.to_thread(call_gpt, enhanced_prompt, self.openai_model)
+            if llm_content:
                 extracted_query = self._extract_query_from_llm(llm_content)
                 return {
                     "success": True,
                     "response": {
                         "message": {
                             "content": llm_content
-                        }
+                        },
+                        "extracted_query": extracted_query
                     }
                 }
             else:
-                return {"success": False, "error": "Gemini Vision não retornou resposta."}
+                return {"success": False, "error": "OpenAI não retornou resposta."}
         except Exception as e:
-            logger.error(f"Erro ao analisar imagem com Gemini Vision: {e}")
+            logger.error(f"Erro ao analisar imagem com OpenAI: {e}")
             return {"success": False, "error": str(e)}
 
     def _extract_query_from_llm(self, llm_content: str) -> str:
@@ -111,7 +111,7 @@ class PropertyImageAnalyzer:
         llm_response = analysis_result.get("response", {}).get("message", {}).get("content", "")
         response += f"{llm_response}\n\n"
         
-        response += "💡 *Análise concluída pela Sofia da Allega Imóveis!*\n"
+        response += "💡 *Análise gerada pelo modelo GPT/OpenAI (Sofia da Allega Imóveis)*\n"
         response += "📞 *Quer mais informações? Entre em contato:*\n"
         response += "🏠 Vendas: (41) 99214-6670\n"
         response += "🏡 Locação: (41) 99223-0874"

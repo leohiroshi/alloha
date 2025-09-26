@@ -1,6 +1,6 @@
 """
 Serviço de Inteligência Imobiliária
-Integra dados de imóveis com a IA Gemini para respostas inteligentes
+Integra dados de imóveis com a IA (GPT/OpenAI) para respostas inteligentes
 """
 
 import json
@@ -12,23 +12,22 @@ from datetime import datetime, timedelta
 import re
 import aiohttp
 from dotenv import load_dotenv
-import google.generativeai as genai
 
 load_dotenv()
 
 from .firebase_service import FirebaseService
+from rag_pipeline import call_gpt, build_prompt, retrieve
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PropertyIntelligenceService:
-    """Serviço que combina Gemini com dados imobiliários"""
+    """Serviço que integra o GPT/OpenAI (RAG) com dados imobiliários"""
 
     def __init__(self):
         self.firebase_service = FirebaseService()
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
-        genai.configure(api_key=self.gemini_api_key)
-        self.model = genai.GenerativeModel("gemini-2.5-pro")
+        # Nome do modelo GPT/OpenAI
+        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
         self.property_cache = {}
         self.cache_expiry = timedelta(hours=6)
         self.last_cache_update = None
@@ -345,35 +344,35 @@ class PropertyIntelligenceService:
         )
 
     async def process_property_inquiry(self, message: str, user_id: str) -> str:
-        """Processa consulta sobre imóveis usando Gemini e o índice inteligente"""
-        try:
-            await self.load_property_data()
-            criteria = self.extract_search_criteria(message)
-            logger.info(f"Busca de imóveis - User: {user_id}, Critérios: {criteria}")
+         """Processa consulta sobre imóveis usando o índice inteligente"""
+         try:
+             await self.load_property_data()
+             criteria = self.extract_search_criteria(message)
+             logger.info(f"Busca de imóveis - User: {user_id}, Critérios: {criteria}")
 
-            properties = self.search_properties(criteria)
-            await self.firebase_service.save_property_search(user_id, criteria, len(properties))
-            response = self.format_property_response(properties, criteria)
+             properties = self.search_properties(criteria)
+             await self.firebase_service.save_property_search(user_id, criteria, len(properties))
+             response = self.format_property_response(properties, criteria)
 
-            # Chama Gemini para enriquecer a resposta
-            gemini_response = await self._call_gemini_property_assistant(message, criteria, properties[:2])
-            if gemini_response:
-                response += f"\n\n🤖 *Dica da Sofia:*\n{gemini_response}"
+             # Enriquecer a resposta com GPT (RAG-like assistant)
+             gpt_response = await self._call_gpt_property_assistant(message, criteria, properties[:2])
+             if gpt_response:
+                 response += f"\n\n🤖 *Dica da Sofia:*\n{gpt_response}"
 
-            return response
+             return response
 
-        except Exception as e:
-            logger.error(f"Erro ao processar consulta de imóveis: {str(e)}")
-            return (
-                "😅 Ops! Tive um probleminha ao buscar os imóveis.\n\n"
-                "Mas você pode entrar em contato direto:\n\n"
-                f"📞 Vendas: {self.company_info['phone_sales']}\n"
-                f"📞 Locação: {self.company_info['phone_rental']}\n\n"
-                "Nossos especialistas vão te ajudar! 😊"
-            )
+         except Exception as e:
+             logger.error(f"Erro ao processar consulta de imóveis: {str(e)}")
+             return (
+                 "😅 Ops! Tive um probleminha ao buscar os imóveis.\n\n"
+                 "Mas você pode entrar em contato direto:\n\n"
+                 f"📞 Vendas: {self.company_info['phone_sales']}\n"
+                 f"📞 Locação: {self.company_info['phone_rental']}\n\n"
+                 "Nossos especialistas vão te ajudar! 😊"
+             )
 
-    async def _call_gemini_property_assistant(self, message: str, criteria: Dict[str, Any], properties: List[Dict[str, Any]]) -> Optional[str]:
-        """Chama Gemini para gerar dica ou resumo inteligente"""
+    async def _call_gpt_property_assistant(self, message: str, criteria: Dict[str, Any], properties: List[Dict[str, Any]]) -> Optional[str]:
+        """Chama o GPT (via call_gpt) para gerar uma dica ou resumo"""
         try:
             system_prompt = (
                 "Você é a Sofia, assistente virtual da Allega Imóveis. "
@@ -384,35 +383,34 @@ class PropertyIntelligenceService:
             user_prompt = (
                 f"Usuário perguntou: \"{message}\"\n"
                 f"Critérios extraídos: {json.dumps(criteria, ensure_ascii=False)}\n"
-                f"Imóveis encontrados: {len(properties)} resultados\n"
-                "Dê uma dica útil ou sugestão para ajudar na busca."
+                f"Imóveis mostrados: {len(properties)}\n"
             )
 
-            prompt = f"{system_prompt}\n\n{user_prompt}\nSofia:"
+            # inclua uma prévia dos imóveis (título e url)
+            props_preview = "\n".join([f"- {p.get('title','')} | {p.get('url','')}" for p in properties])
+            prompt = f"{system_prompt}\n\n{user_prompt}\nImóveis:\n{props_preview}\n\nSofia:"
 
-            # Gemini não é async, então use to_thread
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
-            return response.text.strip()[:250] if response and hasattr(response, "text") else None
+            # call_gpt é bloqueante; execute em thread
+            response_text = await asyncio.to_thread(call_gpt, prompt, self.openai_model)
+            return response_text.strip()[:250] if response_text else None
         except Exception as e:
-            logger.error(f"Erro ao chamar Gemini: {str(e)}")
+            logger.error(f"Erro ao chamar GPT: {str(e)}")
             return None
 
     async def get_property_recommendations(self, user_preferences: Dict[str, Any]) -> str:
-        """Gera recomendações personalizadas usando Gemini"""
+        """Gera recomendações personalizadas usando o GPT"""
         try:
             system_prompt = (
                 "Você é a Sofia da Allega Imóveis. "
                 "Com base nas preferências do usuário, sugira tipos de imóveis e bairros em Curitiba. "
                 "Seja específica e útil. Máximo 300 caracteres."
             )
-
             user_prompt = f"Preferências do usuário: {json.dumps(user_preferences, ensure_ascii=False)}"
             prompt = f"{system_prompt}\n\n{user_prompt}\nSofia:"
 
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
-            content = response.text.strip() if response and hasattr(response, "text") else None
+            content = await asyncio.to_thread(call_gpt, prompt, self.openai_model)
             if content:
-                return f"💡 *Recomendações da Sofia:*\n{content}\n\n{self._add_contact_info()}"
+                return f"💡 *Recomendações da Sofia:*\n{content.strip()}\n\n{self._add_contact_info()}"
             else:
                 return self._get_fallback_recommendations()
         except Exception as e:
@@ -420,7 +418,7 @@ class PropertyIntelligenceService:
             return self._get_fallback_recommendations()
 
     def _get_fallback_recommendations(self) -> str:
-        """Recomendações padrão da Sofia (Gemini)"""
+        """Recomendações padrão da Sofia"""
         return (
             "💡 *Recomendações da Sofia:*\n\n"
             "🏠 Para famílias: Casas no Champagnat ou Batel\n"

@@ -1,6 +1,6 @@
 # Integração do PropertyImageAnalyzer com main.py
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -9,10 +9,11 @@ from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
-from app.services.ai_service import ai_service
 from app.services.property_intelligence import property_intelligence
 from app.services.firebase_service import firebase_service
 from app.services.property_scraper import monitor_scraper
+from rag_pipeline import retrieve, build_prompt, call_gpt
+import asyncio
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -85,7 +86,6 @@ async def health():
             "phone_number_configured": bool(PHONE_NUMBER_ID),
             "firebase_status": firebase_status,
             "property_data_loaded": property_data_loaded,
-            "ai_service_available": bool(ai_service.gemini_api_key),
             "features": {
                 "property_search": True,
                 "market_insights": True,
@@ -534,6 +534,49 @@ async def run_property_scraper():
             "message": str(e)
         }
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.post("/query")
+async def query_endpoint(payload: dict = Body(...)):
+    """
+    Recebe JSON com:
+    {
+        "question": "texto da pergunta",
+        "filters": {"neighborhood": "Água Verde"}  # opcional
+    }
+    """
+    question = payload.get("question")
+    filters = payload.get("filters", {})
+
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required")
+
+    # 1) Recuperar documentos relevantes
+    retrieved = retrieve(question, top_k=5, filters=filters)
+
+    # 2) Montar prompt para o OpenAI
+    prompt = build_prompt(question, retrieved)
+
+    # 3) Chamar OpenAI via função compat (bloqueante) em thread
+    try:
+        response = await asyncio.to_thread(call_gpt, prompt)
+    except Exception as e:
+        logger.error(f"Error calling OpenAI: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error generating response")
+
+    # 4) Preparar dados para retorno (incluindo URLs e imagens)
+    candidates = []
+    for r in retrieved:
+        m = r.get("meta", r.get("metadata", {}))
+        candidates.append({
+            "id": r.get("id"),
+            "preview": r.get("text", "")[:200],
+            "url": m.get("url"),
+            "image": m.get("main_image") or m.get("image"),
+            "neighborhood": m.get("neighborhood"),
+            "price": m.get("price")
+        })
+
+    # 5) Retornar JSON com resposta e candidatos
+    return {
+        "answer": response,
+        "candidates": candidates
+    }

@@ -6,29 +6,51 @@ import base64
 from typing import Optional, Dict, Any
 from datetime import datetime
 import asyncio
-import google.generativeai as genai
+from rag_pipeline import call_gpt, retrieve, build_prompt
 
 logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self):
-        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
-        genai.configure(api_key=self.gemini_api_key)
+        # RAG endpoint (se usado) — padronizado para integração GPT/OpenAI
+        self.rag_endpoint = os.getenv("RAG_ENDPOINT", "http://localhost:8000/query")
         self.conversation_context = {}
         self._property_intelligence = None
-
+        # knowledge tetap disponível
         self.property_knowledge = {
             "tipos": ["apartamento", "casa", "kitnet", "studio", "cobertura", "terreno", "comercial"],
             "regioes": ["centro", "zona sul", "zona norte", "zona oeste", "zona leste", "bigorrilho", "batel", "cabral", "champagnat", "água verde", "portão", "santa felicidade"],
             "faixas_preco": {
                 "baixo": "até R$ 200.000",
-                "medio": "R$ 200.000 - R$ 500.000", 
+                "medio": "R$ 200.000 - R$ 500.000",
                 "alto": "R$ 500.000 - R$ 1.000.000",
                 "premium": "acima de R$ 1.000.000"
             },
             "caracteristicas": ["quartos", "banheiros", "vagas", "area", "piscina", "churrasqueira"]
         }
-        self.model = genai.GenerativeModel("gemini-2.5-pro")  # Modelo de texto do Gemini
+
+    async def generate_response(self, message: str, user_phone: str, image_bytes: bytes = None) -> str:
+        """
+        Gera resposta usando o GPT (OpenAI, por exemplo GPT-5 mini).
+        Para buscas de imóvel, usa RAG via retrieve/build_prompt/call_gpt.
+        Para perguntas gerais, chama call_gpt diretamente com prompt.
+        """
+        # detecção simples de busca de imóvel
+        if any(k in message.lower() for k in ["apartamento", "casa", "procuro", "quartos", "aluguel", "venda"]):
+            # Retrieval + RAG
+            retrieved = retrieve(message, top_k=5, filters={})
+            prompt = build_prompt(message, retrieved)
+            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            return await asyncio.to_thread(call_gpt, prompt, model)
+
+        prompt = f"Você é Sofia, assistente da Allega Imóveis.\nUsuário: {message}\nResponda de forma concisa."
+        model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        return await asyncio.to_thread(call_gpt, prompt, model)
+
+    async def generate_text(self, prompt: str) -> str:
+        # wrapper async para chamar o GPT (bloqueante) em thread
+        model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        return await asyncio.to_thread(call_gpt, prompt, model)
 
     @property
     def property_intelligence(self):
@@ -39,20 +61,6 @@ class AIService:
             except ImportError:
                 self._property_intelligence = None
         return self._property_intelligence
-
-    async def generate_response(self, message: str, user_phone: str, image_bytes: bytes = None) -> str:
-        try:
-            intent = await self._analyze_intent(message)
-            context = await self._get_conversation_context_from_db(user_phone)
-            self._update_conversation_context(user_phone, message, intent)
-            
-            if image_bytes:
-                return await self._handle_image_analysis(message, image_bytes)
-            else:
-                return await self._generate_contextual_response(message, intent, context)
-        except Exception as e:
-            logger.error(f"Error generating AI response: {str(e)}")
-            return "Desculpe, houve um problema. Tente novamente em alguns instantes."
 
     async def _get_conversation_context_from_db(self, user_phone: str) -> Dict:
         try:
@@ -290,7 +298,9 @@ Máximo 250 caracteres."""
 
     async def _handle_image_analysis(self, message: str, image_bytes: bytes) -> str:
         try:
+            # converter imagem para base64 (atenção ao tamanho)
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+            # adicionar marcadores para facilitar parsing no LLM
             prompt = (
                 f"Analise esta imagem de imóvel. Mensagem do usuário: {message}\n\n"
                 "Como Sofia da Allega Imóveis, identifique:\n"
@@ -300,16 +310,21 @@ Máximo 250 caracteres."""
                 "- Localização aproximada se possível\n"
                 "- Diferenciais e pontos de destaque\n"
                 "- Valor estimado se conseguir identificar\n\n"
-                "Seja específico e profissional na análise."
+                "Seja específico e profissional na análise.\n\n"
+                "---BEGIN_IMAGE_BASE64---\n"
+                f"{image_b64}\n"
+                "---END_IMAGE_BASE64---\n\n"
+                "Resuma em até 300 caracteres."
             )
-            # Gemini Vision API (google.generativeai) suporta imagens:
-            response = await asyncio.to_thread(self.model.generate_content, [
-                {"text": prompt},
-                {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}}
-            ])
-            if response and hasattr(response, "text"):
+
+            model_name = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            # call_gpt é bloqueante — executar em thread
+            llm_response = await asyncio.to_thread(call_gpt, prompt, model_name)
+
+            if llm_response:
+                content = llm_response.strip()
                 return (
-                    f"🏠 *Análise do Imóvel Concluída*\n\n{response.text}\n\n"
+                    f"🏠 *Análise do Imóvel Concluída*\n\n{content}\n\n"
                     "💡 *Análise concluída pela Sofia da Allega Imóveis!*\n"
                     "📞 *Quer mais informações?*\n"
                     "🏠 Vendas: (41) 99214-6670\n"
@@ -318,7 +333,7 @@ Máximo 250 caracteres."""
             else:
                 return self._get_image_analysis_fallback()
         except Exception as e:
-            logger.error(f"Erro ao analisar imagem com Gemini: {e}")
+            logger.error(f"Erro ao analisar imagem com OpenAI: {e}")
             return self._get_image_analysis_fallback()
 
     def _get_image_analysis_fallback(self) -> str:
@@ -337,7 +352,7 @@ Máximo 250 caracteres."""
 
 
     def is_available(self) -> bool:
-        return True  # Always available since we are using Gemini
+        return True 
 
     async def get_property_suggestions(self, criteria: str, user_phone: str) -> str:
         try:
@@ -378,17 +393,3 @@ Sugira opções de imóveis adequadas."""
         else:
             self.conversation_context.clear()
             logger.info("🗑️ Todo o cache de conversas foi limpo")
-
-    async def generate_text(self, prompt: str) -> str:
-        """
-        Gera texto usando Gemini 2.5 Pro.
-        """
-        try:
-            # Gemini não é async, então use to_thread
-            response = await asyncio.to_thread(self.model.generate_content, prompt)
-            return response.text.strip() if response and hasattr(response, "text") else ""
-        except Exception as e:
-            logger.error(f"Erro ao chamar Gemini: {str(e)}")
-            return "😅 Tive um problema técnico ao gerar a resposta. Tente novamente mais tarde."
-
-ai_service = AIService()

@@ -12,12 +12,24 @@ requests==2.31.0
 firebase-admin==6.2.0
 google-cloud-firestore==2.11.1
 
-# Web scraping
+# Web scraping / browser automation
 beautifulsoup4==4.12.2
 lxml==4.9.3
+selenium==4.14.0
+webdriver-manager==4.11.0
 
-# Image processing (versão compatível)
+# Image processing
 Pillow==10.1.0
+
+# Embeddings / semantic search / LLM
+openai>=1.0.0
+chromadb>=0.4.0
+sentence-transformers>=2.2.2
+tiktoken>=0.4.0
+
+# PyTorch (required by sentence-transformers)
+# NOTE: prefer installing the platform-specific CPU wheel in your Dockerfile or CI.
+torch>=2.2.2
 
 # Async utilities
 asyncio-mqtt==0.16.1
@@ -31,8 +43,5 @@ python-dateutil==2.8.2
 # Logging
 colorlog==6.8.0
 
-# Environment variables
+# Optional: keep if used for env parsing; else remove to avoid duplication with python-dotenv
 python-decouple==3.8
-
-# Gemini/Google Generative AI
-google-generativeai>=0.3.2
