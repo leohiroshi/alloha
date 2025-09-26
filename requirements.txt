@@ -24,25 +24,13 @@ Pillow==10.1.0
 # Embeddings / semantic search / LLM
 openai>=1.0.0
 numpy<2.0.0
-chromadb>=0.4.0
+chromadb==0.4.0
 sentence-transformers>=2.2.2
 tiktoken>=0.4.0
 
-# PyTorch (required by sentence-transformers)
-# NOTE: prefer installing the platform-specific CPU wheel in your Dockerfile or CI.
-torch>=2.2.2
-
-# Async utilities
-asyncio-mqtt==0.16.1
-
-# JSON handling
-orjson==3.9.10
-
-# Date/time utilities
-python-dateutil==2.8.2
-
-# Logging
-colorlog==6.8.0
-
-# Optional: keep if used for env parsing; else remove to avoid duplication with python-dotenv
+# Optional helpers
 python-decouple==3.8
+orjson==3.9.10
+python-dateutil==2.8.2
+colorlog==6.8.0
+asyncio-mqtt==0.16.1
