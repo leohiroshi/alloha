@@ -46,7 +46,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # - scripts/: utility scripts if required
 COPY app/ /app/app
 COPY chroma_db/ /app/chroma_db
-COPY scripts/ /app/scripts
 
 # Ensure app path is on PYTHONPATH
 ENV PYTHONPATH=/app
