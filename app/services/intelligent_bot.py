@@ -82,12 +82,15 @@ class IntelligentRealEstateBot:
 
     async def process_message(self, message: str, user_phone: str) -> str:
         """
-        Processa mensagem do usuário, usando RAG + GPT para buscas de imóvel e GPT para conversas gerais.
+        Processa mensagem do usuário. Agora envia imediatamente um placeholder "digitando..."
+        (salvo em Firestore) e retorna rápido. A geração da resposta completa roda em background
+        e substitui/atualiza o placeholder quando pronta.
         """
         try:
             logger.info(f"📨 Mensagem de {user_phone}: {message[:100]}")
-            # salve msg recebida imediatamente
-            db.collection("messages").add({
+
+            # 1) Salva mensagem recebida (received)
+            await asyncio.to_thread(db.collection("messages").add, {
                 "user_phone": user_phone,
                 "message": message,
                 "direction": "received",
@@ -95,53 +98,90 @@ class IntelligentRealEstateBot:
                 "metadata": {}
             })
 
-            history = await self.get_conversation_history(user_phone, limit=10)
+            # 2) Cria placeholder "digitando..." (sent) e captura referência para atualização
+            placeholder = {
+                "user_phone": user_phone,
+                "message": "digitando...",
+                "direction": "sent",
+                "timestamp": datetime.utcnow(),
+                "metadata": {"typing": True}
+            }
+            add_result = await asyncio.to_thread(db.collection("messages").add, placeholder)
+            # add_result pode ser (DocumentReference, write_time) ou somente DocumentReference dependendo da lib
+            placeholder_ref = add_result[0] if isinstance(add_result, (list, tuple)) else add_result
 
-            # tente extrair perfil/entidades do usuário via LLM (async wrapper)
-            try:
-                profile = await self._extract_profile_with_gpt(message, user_phone, history)
-                if profile:
-                    await self._upsert_user_profile(user_phone, profile)
-            except Exception:
-                logger.debug("Perfil não extraído ou erro silencioso")
+            # 3) Recupera histórico rápido (menor limite para agilizar)
+            history = await self.get_conversation_history(user_phone, limit=6)
 
+            # 4) Dispara geração/atualização em background
+            asyncio.create_task(self._generate_and_update_response(
+                message, user_phone, history, placeholder_ref
+            ))
+
+            # 5) Retorna rápido para o caller — "digitando..." para percepção de velocidade
+            return "digitando..."
+        except Exception as e:
+            logger.exception(f"Erro ao processar mensagem (inicial): {e}")
+            return "Desculpe, ocorreu um erro. Tente novamente mais tarde."
+
+    async def _generate_and_update_response(self, message: str, user_phone: str, history: List[Dict[str,str]], placeholder_ref):
+        """Gera a resposta (search ou geral) e atualiza o placeholder no Firestore."""
+        try:
             # Detecta busca de imóvel
             if self._is_property_search(message) and self.bot_config.get("enable_property_search", True):
-                # extraia critérios e salve busca
                 try:
                     criteria = property_intelligence.extract_search_criteria(message)
                 except Exception:
                     criteria = {}
                 await self._save_property_search(user_phone, message, criteria)
-                property_response = await self.process_property_search(message)
-                # salva resposta no Firestore
-                db.collection("messages").add({
-                    "user_phone": user_phone,
-                    "message": property_response,
-                    "direction": "sent",
-                    "timestamp": datetime.utcnow(),
-                    "metadata": {}
-                })
-                return property_response
+                response_text = await self.process_property_search(message)
+            else:
+                # Prompt reduzido + histórico curto para velocidade
+                prompt = self._build_prompt(message, user_phone)
+                short_history = [{"role": h["role"], "content": h["content"]} for h in history] + [{"role": "user", "content": message}]
+                prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])
 
-            # Para conversas gerais, usa GPT (via call_gpt)
-            prompt = self._build_prompt(message, user_phone)
-            full_history = [{"role": h["role"], "content": h["content"]} for h in history] + [{"role": "user", "content": message}]
-            prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in full_history])
+                model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+                # Chamada em thread para não bloquear
+                response_text = await asyncio.to_thread(call_gpt, prompt_with_history, model)
 
-            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-            resp = await asyncio.to_thread(call_gpt, prompt_with_history, model)
-            db.collection("messages").add({
-                "user_phone": user_phone,
-                "message": resp,
+            if not response_text:
+                response_text = "Desculpe, não consegui gerar uma resposta no momento."
+
+            # Atualiza placeholder com resposta final
+            update_doc = {
+                "message": response_text,
                 "direction": "sent",
                 "timestamp": datetime.utcnow(),
-                "metadata": {}
-            })
-            return resp
+                "metadata": {"typing": False, "ai": True}
+            }
+            # placeholder_ref pode ser DocumentReference object ou tuple — suportar ambos
+            try:
+                # caso DocumentReference
+                await asyncio.to_thread(placeholder_ref.set, update_doc, {"merge": True})
+            except Exception:
+                # caso add tenha retornado (ref, write_time)
+                ref = placeholder_ref[0] if isinstance(placeholder_ref, (list, tuple)) else placeholder_ref
+                await asyncio.to_thread(ref.set, update_doc, {"merge": True})
+
+            logger.info(f"Resposta enviada para {user_phone} (atualizada placeholder).")
         except Exception as e:
-            logger.exception(f"Erro ao processar mensagem: {e}")
-            return "Desculpe, ocorreu um erro. Tente novamente mais tarde."
+            logger.exception(f"Erro ao gerar/atualizar resposta: {e}")
+            # tenta marcar placeholder como erro
+            try:
+                err_update = {
+                    "message": "Desculpe, ocorreu um erro ao gerar a resposta.",
+                    "direction": "sent",
+                    "timestamp": datetime.utcnow(),
+                    "metadata": {"typing": False, "ai": True, "error": True}
+                }
+                try:
+                    await asyncio.to_thread(placeholder_ref.set, err_update, {"merge": True})
+                except Exception:
+                    ref = placeholder_ref[0] if isinstance(placeholder_ref, (list, tuple)) else placeholder_ref
+                    await asyncio.to_thread(ref.set, err_update, {"merge": True})
+            except Exception:
+                logger.debug("Falha ao atualizar placeholder com mensagem de erro.")
 
     async def process_image_message(self, image_data: bytes, caption: str, user_phone: str) -> str:
         try:
