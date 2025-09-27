@@ -242,6 +242,8 @@ async def process_whatsapp_message(webhook_data):
             message_text = message.get("text", {}).get("body", "")
             ai_response = await intelligent_bot.process_message(message_text, from_number)
             logger.info(f"🤖 AI Response: {ai_response[:100]}...")
+            if not ai_response:
+                ai_response = "Desculpe, não consegui entender sua mensagem. Pode reformular?"
             success = await whatsapp_service.send_message(from_number, ai_response)
             if success:
                 logger.info(f"✅ Message sent successfully to {from_number}")
