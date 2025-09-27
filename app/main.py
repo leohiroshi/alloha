@@ -217,9 +217,18 @@ async def process_whatsapp_message(webhook_data):
         
         message = value["messages"][0]
         from_number = message["from"]
+        message_id = message.get("id")
         message_type = message.get("type", "text")
         
         logger.info(f"📨 Message from {from_number} - Type: {message_type}")
+        
+        # Marcar como lida (check azul) — não é obrigatório, apenas tenta e loga falhas
+        if message_id and getattr(whatsapp_service, "is_configured", None):
+            try:
+                await whatsapp_service.mark_message_as_read(message_id)
+                logger.info("Marked incoming message as read: %s", message_id)
+            except Exception as e:
+                logger.debug("Failed to mark message as read: %s", e)
         
         # Verificar se é imagem
         if message_type == "image" or (message_type == "document" and message.get("document", {}).get("mime_type", "").startswith("image/")):
