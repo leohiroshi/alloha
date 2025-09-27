@@ -8,7 +8,6 @@ import logging
 from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
-from app.services.webhook_handler import handle_webhook_message
 from app.services.intelligent_bot import intelligent_bot
 from app.services.property_intelligence import property_intelligence
 from app.services.firebase_service import firebase_service
@@ -43,7 +42,18 @@ PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 
 # Inicializar serviços
 whatsapp_service = WhatsAppService(ACCESS_TOKEN, PHONE_NUMBER_ID)
-    
+# Habilitar typing/presence somente se configurado via .env (evita 400s na Cloud API)
+whatsapp_service.supports_typing = os.getenv("WHATSAPP_SUPPORTS_TYPING", "false").lower() in ("1", "true", "yes")
+whatsapp_service.supports_presence = os.getenv("WHATSAPP_SUPPORTS_PRESENCE", "false").lower() in ("1", "true", "yes")
+
+# Injetar a mesma instância no intelligent_bot para evitar criar outra separada
+try:
+    intelligent_bot.whatsapp_service = whatsapp_service
+    intelligent_bot.whatsapp_supports_typing = whatsapp_service.supports_typing
+    intelligent_bot.whatsapp_supports_presence = whatsapp_service.supports_presence
+except Exception:
+    logger.debug("Could not set whatsapp_service on intelligent_bot (attribute may not exist).")
+
 @app.get("/")
 async def root():
     return {
@@ -227,11 +237,16 @@ async def process_whatsapp_message(webhook_data):
             await process_image_message(message, from_number, webhook_data)
             return
         
-        # Para mensagens de texto delegamos ao handler orquestrador
+        # Processar mensagem de texto
         if message_type == "text":
-            # handle_webhook_message fará mark_read, typing, chamar a IA e enviar resposta
-            await handle_webhook_message(webhook_data, whatsapp_service, intelligent_bot.process_message)
-            return
+            message_text = message.get("text", {}).get("body", "")
+            ai_response = await intelligent_bot.process_message(message_text, from_number)
+            logger.info(f"🤖 AI Response: {ai_response[:100]}...")
+            success = await whatsapp_service.send_message(from_number, ai_response)
+            if success:
+                logger.info(f"✅ Message sent successfully to {from_number}")
+            else:
+                logger.error(f"❌ Failed to send message to {from_number}")
         
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")

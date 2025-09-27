@@ -63,6 +63,11 @@ class IntelligentRealEstateBot:
             'enable_image_analysis': True,
             'max_properties_per_response': 3
         }
+        # Whatsapp service será instanciado sob demanda
+        self.whatsapp_service = None
+        # flags controláveis via env para evitar 400s da Cloud API
+        self.whatsapp_supports_typing = False
+        self.whatsapp_supports_presence = False
         logger.info("Bot de Inteligência Imobiliária iniciado")
 
     def _get_conversation_history_sync(self, user_phone, limit=10) -> List[Dict[str, str]]:
@@ -108,11 +113,25 @@ class IntelligentRealEstateBot:
                 phone_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
                 if token and phone_id:
                     self.whatsapp_service = WhatsAppService(token, phone_id)
+                    # habilitar typing/presence opcionalmente via env (padrão: false)
+                    self.whatsapp_service.supports_typing = os.getenv("WHATSAPP_SUPPORTS_TYPING", "false").lower() in ("1", "true", "yes")
+                    self.whatsapp_service.supports_presence = os.getenv("WHATSAPP_SUPPORTS_PRESENCE", "false").lower() in ("1", "true", "yes")
+                    # espelhar nas flags locais também (útil se acessar daqui)
+                    self.whatsapp_supports_typing = self.whatsapp_service.supports_typing
+                    self.whatsapp_supports_presence = self.whatsapp_service.supports_presence
+
+            # 2.1) Se suportar, marque presença "online" (fire-and-forget)
+            if getattr(self, "whatsapp_service", None) and getattr(self.whatsapp_service, "supports_presence", False):
+                try:
+                    asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "available"))
+                except Exception:
+                    logger.debug("Falha ao disparar send_presence(available) em background.")
 
             # 3) Start periodic typing indicator in background (stoppable via Event)
             stop_typing_event = asyncio.Event()
             typing_task = None
-            if getattr(self, "whatsapp_service", None):
+            # apenas inicia loop de typing se o serviço suportar explicitamente
+            if getattr(self, "whatsapp_service", None) and getattr(self.whatsapp_service, "supports_typing", False):
                 typing_task = asyncio.create_task(self._periodic_typing(user_phone, stop_typing_event))
             else:
                 logger.debug("WhatsAppService not configured; skipping typing indicator.")
@@ -136,7 +155,8 @@ class IntelligentRealEstateBot:
         try:
             while not stop_event.is_set():
                 try:
-                    await self.whatsapp_service.send_typing_indicator(user_phone)
+                    # chama o método typing_on da sua WhatsAppService
+                    await self.whatsapp_service.send_typing_on(user_phone)
                 except Exception as e:
                     logger.debug(f"Falha ao enviar typing indicator: {e}")
                 # aguarda com checagem periódica do evento
@@ -151,9 +171,12 @@ class IntelligentRealEstateBot:
         finally:
             # tentativa final de garantir que o typing seja "desligado" ao terminar (se a API suportar)
             try:
-                # Não existe typing_off na implementação atual; enviar mais um indicador é inócuo,
-                # mas mantemos o bloco para futuras implementações.
-                pass
+                # se o serviço suportar presence, marcar como offline ao final (fire-and-forget)
+                if getattr(self, "whatsapp_service", None) and getattr(self.whatsapp_service, "supports_presence", False):
+                    try:
+                        asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "unavailable"))
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

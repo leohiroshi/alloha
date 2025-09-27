@@ -175,24 +175,48 @@ class WhatsAppService:
             logger.exception("Error marking message as read: %s", e)
             return False
 
-    async def send_typing_indicator(self, to: str) -> bool:
-        """Enviar o status 'digitando...' — a Cloud API oficial pode não suportar esse tipo."""
+    async def send_typing_on(self, to: str) -> bool:
+        """Tentar enviar 'typing_on' (pode ser rejeitado pela Cloud API)."""
         payload = {
             "messaging_product": "whatsapp",
             "to": to,
-            "type": "typing",
+            "type": "typing_on"
         }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.messages_url, headers=self.headers, json=payload, timeout=10) as response:
                     resp_text = await response.text()
                     if 200 <= response.status < 300:
-                        logger.info("Typing indicator sent to %s.", to)
+                        logger.info("Typing_on indicator sent to %s", to)
                         return True
-                    logger.error("Failed to send typing indicator: %s - %s", response.status, resp_text[:1000])
+                    logger.error("Failed to send typing_on: %s - %s", response.status, resp_text[:1000])
                     return False
         except Exception as e:
-            logger.exception("Error sending typing indicator: %s", e)
+            logger.exception("Error sending typing_on: %s", e)
+            return False
+
+    async def send_presence(self, to: str, presence: str = "available") -> bool:
+        """
+        Enviar presença (online/offline).
+        presence: "available" (online) or "unavailable" (offline)
+        """
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "presence",
+            "presence": presence
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.messages_url, headers=self.headers, json=payload, timeout=10) as response:
+                    resp_text = await response.text()
+                    if 200 <= response.status < 300:
+                        logger.info("Presence '%s' sent to %s", presence, to)
+                        return True
+                    logger.error("Failed to send presence: %s - %s", response.status, resp_text[:1000])
+                    return False
+        except Exception as e:
+            logger.exception("Error sending presence: %s", e)
             return False
 
     def is_configured(self) -> bool:
