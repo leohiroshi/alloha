@@ -1,6 +1,7 @@
 # handler para orquestrar mark_read -> typing -> AI -> send_message
 import asyncio
 import logging
+import inspect
 from typing import Callable, Awaitable, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -22,21 +23,41 @@ async def handle_webhook_message(webhook_data: Dict[str, Any], whatsapp_service,
         tasks = []
         if message_id:
             tasks.append(whatsapp_service.mark_message_as_read(message_id))
-        tasks.append(whatsapp_service.send_typing_indicator(user_wa_id))
+        # attempt typing indicator (may return False if API doesn't support it)
+        if hasattr(whatsapp_service, "send_typing_indicator"):
+            tasks.append(whatsapp_service.send_typing_indicator(user_wa_id))
         # fire-and-forget but await to ensure API called quickly
         await asyncio.gather(*tasks, return_exceptions=True)
 
-        # obter resposta da IA (suporta coroutine ou callable síncrono)
-        if asyncio.iscoroutinefunction(ai_func):
-            ai_response = await ai_func(message_text)
+        # obter resposta da IA — detecta assinatura (1 ou 2 params) e chama apropriadamente
+        sig = inspect.signature(ai_func)
+        param_count = len(sig.parameters)
+        ai_response = None
+
+        if param_count == 1:
+            if asyncio.iscoroutinefunction(ai_func):
+                ai_response = await ai_func(message_text)
+            else:
+                ai_response = await asyncio.to_thread(ai_func, message_text)
+        elif param_count == 2:
+            # chama com (message, user_phone)
+            if asyncio.iscoroutinefunction(ai_func):
+                ai_response = await ai_func(message_text, user_wa_id)
+            else:
+                ai_response = await asyncio.to_thread(ai_func, message_text, user_wa_id)
         else:
-            ai_response = await asyncio.to_thread(ai_func, message_text)
+            # fallback: tente chamar com message_text e logue
+            logger.warning("ai_func has unexpected signature (%d params). Calling with only message_text.", param_count)
+            if asyncio.iscoroutinefunction(ai_func):
+                ai_response = await ai_func(message_text)
+            else:
+                ai_response = await asyncio.to_thread(ai_func, message_text)
 
         # opcional: atraso natural para simular digitação
         await asyncio.sleep(2.5)
 
         # enviar resposta final
-        sent_ok = await whatsapp_service.send_message(user_wa_id, ai_response)
+        sent_ok = await whatsapp_service.send_message(user_wa_id, ai_response or "")
         if not sent_ok:
             logger.error("Failed to send AI response to %s", user_wa_id)
 
