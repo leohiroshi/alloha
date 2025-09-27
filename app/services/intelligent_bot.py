@@ -109,10 +109,10 @@ class IntelligentRealEstateBot:
             logger.info(f"Mensagem salva no Firestore para {user_phone}.")
 
             stop_presence_event = asyncio.Event()
-            presence_task = asyncio.create_task(self.keep_presence_online(self.whatsapp_service, user_phone, stop_presence_event))
+            asyncio.create_task(self.keep_presence_online(self.whatsapp_service, user_phone, stop_presence_event))
 
             try:
-                logger.info(f"Inicializando WhatsAppService para {user_phone}.")
+                logger.info(f"Isnicializando WhatsAppService para {user_phone}.")
                 asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "available"))
             except Exception:
                 logger.debug("Falha ao disparar send_presence(available) em background.")
@@ -494,7 +494,7 @@ class IntelligentRealEstateBot:
         except Exception as e:
             logger.debug(f"Erro salvar embedding meta: {e}")
 
-    async def keep_presence_online(whatsapp_service, user_phone, stop_event: asyncio.Event):
+    async def keep_presence_online(self, whatsapp_service, user_phone, stop_event: asyncio.Event):
         try:
             while not stop_event.is_set():
                 await whatsapp_service.send_presence(user_phone, "available")
