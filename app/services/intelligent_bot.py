@@ -108,39 +108,17 @@ class IntelligentRealEstateBot:
             })
             logger.info(f"Mensagem salva no Firestore para {user_phone}.")
 
-            # 2) Garantir existência de self.whatsapp_service (tenta instanciar a partir do .env se não houver)
-            if not getattr(self, "whatsapp_service", None):
-                logger.info(f"Instanciando WhatsAppService para {user_phone} a partir do .env.")
-                token = os.getenv("WHATSAPP_TOKEN")
-                phone_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-                if token and phone_id:
-                    self.whatsapp_service = WhatsAppService(token, phone_id)
-                    # habilitar typing/presence opcionalmente via env (padrão: false)
-                    self.whatsapp_service.supports_typing = os.getenv("WHATSAPP_SUPPORTS_TYPING", "false").lower() in ("1", "true", "yes")
-                    self.whatsapp_service.supports_presence = os.getenv("WHATSAPP_SUPPORTS_PRESENCE", "false").lower() in ("1", "true", "yes")
-                    # espelhar nas flags locais também (útil se acessar daqui)
-                    self.whatsapp_supports_typing = self.whatsapp_service.supports_typing
-                    self.whatsapp_supports_presence = self.whatsapp_service.supports_presence
-
-            logger.info(f"WhatsAppService instanciado: {self.whatsapp_service is not None}, supports_typing={getattr(self.whatsapp_service, 'supports_typing', False)}, supports_presence={getattr(self.whatsapp_service, 'supports_presence', False)}")
-            
-            # 2.1) Se suportar, marque presença "online" (fire-and-forget)
-            if getattr(self, "whatsapp_service", None) and getattr(self.whatsapp_service, "supports_presence", False):
-                logger.info(f"Enviando presença 'available' para {user_phone}.")
-                try:
-                    asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "available"))
-                except Exception:
-                    logger.debug("Falha ao disparar send_presence(available) em background.")
+            try:
+                logger.info(f"Inicializando WhatsAppService para {user_phone}.")
+                asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "available"))
+            except Exception:
+                logger.debug("Falha ao disparar send_presence(available) em background.")
 
             # 3) Start periodic typing indicator in background (stoppable via Event)
             stop_typing_event = asyncio.Event()
             typing_task = None
-            # apenas inicia loop de typing se o serviço suportar explicitamente
-            if getattr(self, "whatsapp_service", None) and getattr(self.whatsapp_service, "supports_typing", False):
-                logger.info(f"Iniciando loop de typing indicator para {user_phone}.")
-                typing_task = asyncio.create_task(self._periodic_typing(user_phone, stop_typing_event))
-            else:
-                logger.debug("WhatsAppService not configured; skipping typing indicator.")
+            logger.info(f"Iniciando loop de typing indicator para {user_phone}.")
+            typing_task = asyncio.create_task(self._periodic_typing(user_phone, stop_typing_event))
 
             # 4) Recupera histórico rápido (menor limite para agilizar)
             history = await self.get_conversation_history(user_phone, limit=6)
