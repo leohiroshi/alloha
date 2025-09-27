@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
+from app.services.webhook_handler import handle_webhook_message
 from app.services.intelligent_bot import intelligent_bot
 from app.services.property_intelligence import property_intelligence
 from app.services.firebase_service import firebase_service
@@ -226,21 +227,11 @@ async def process_whatsapp_message(webhook_data):
             await process_image_message(message, from_number, webhook_data)
             return
         
-        # Processar mensagem de texto
-        message_text = message.get("text", {}).get("body", "")
-        
-        # Processar com sistema inteligente
-        ai_response = await intelligent_bot.process_message(message_text, from_number)
-        
-        logger.info(f"🤖 AI Response: {ai_response[:100]}...")
-        
-        # Enviar resposta via WhatsApp
-        success = await whatsapp_service.send_message(from_number, ai_response)
-        
-        if success:
-            logger.info(f"✅ Message sent successfully to {from_number}")
-        else:
-            logger.error(f"❌ Failed to send message to {from_number}")
+        # Para mensagens de texto delegamos ao handler orquestrador
+        if message_type == "text":
+            # handle_webhook_message fará mark_read, typing, chamar a IA e enviar resposta
+            await handle_webhook_message(webhook_data, whatsapp_service, intelligent_bot.process_message)
+            return
         
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
