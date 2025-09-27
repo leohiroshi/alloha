@@ -117,7 +117,7 @@ class IntelligentRealEstateBot:
             # 3) Start periodic typing indicator in background (stoppable via Event)
             stop_typing_event = asyncio.Event()
             logger.info(f"Iniciando loop de typing indicator para {user_phone}.")
-            asyncio.create_task(self._periodic_typing(user_phone, stop_typing_event))
+            await self.whatsapp_service.send_presence(user_phone, "available")
             logger.info(f"Loop de typing indicator iniciado para {user_phone}.")
 
             # 4) Recupera histórico rápido (menor limite para agilizar)
