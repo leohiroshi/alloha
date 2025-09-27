@@ -177,12 +177,14 @@ class WhatsAppService:
 
     async def send_typing_on(self, to: str) -> bool:
         """Tentar enviar 'typing_on' (pode ser rejeitado pela Cloud API)."""
+        logger.info("Attempting to send typing_on to %s", to)
         payload = {
             "messaging_product": "whatsapp",
             "to": to,
             "type": "typing_on"
         }
         try:
+            logger.info("Sending typing_on payload: %s", payload)
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.messages_url, headers=self.headers, json=payload, timeout=10) as response:
                     resp_text = await response.text()

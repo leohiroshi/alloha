@@ -108,6 +108,9 @@ class IntelligentRealEstateBot:
             })
             logger.info(f"Mensagem salva no Firestore para {user_phone}.")
 
+            stop_presence_event = asyncio.Event()
+            presence_task = asyncio.create_task(self.keep_presence_online(self.whatsapp_service, user_phone, stop_presence_event))
+
             try:
                 logger.info(f"Inicializando WhatsAppService para {user_phone}.")
                 asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "available"))
@@ -116,9 +119,9 @@ class IntelligentRealEstateBot:
 
             # 3) Start periodic typing indicator in background (stoppable via Event)
             stop_typing_event = asyncio.Event()
-            typing_task = None
             logger.info(f"Iniciando loop de typing indicator para {user_phone}.")
-            typing_task = asyncio.create_task(self._periodic_typing(user_phone, stop_typing_event))
+            asyncio.create_task(self._periodic_typing(user_phone, stop_typing_event))
+            logger.info(f"Loop de typing indicator iniciado para {user_phone}.")
 
             # 4) Recupera histórico rápido (menor limite para agilizar)
             history = await self.get_conversation_history(user_phone, limit=6)
@@ -137,8 +140,10 @@ class IntelligentRealEstateBot:
     async def _periodic_typing(self, user_phone: str, stop_event: asyncio.Event, interval: int = 12):
         """Envia typing indicator repetidamente até stop_event ser setado."""
         try:
+            logger.info(f"Periodic typing task started for {user_phone} with interval {interval}s.")
             while not stop_event.is_set():
                 try:
+                    logger.info(f"Enviando typing indicator para {user_phone}.")
                     # chama o método typing_on da sua WhatsAppService
                     await self.whatsapp_service.send_typing_on(user_phone)
                 except Exception as e:
@@ -488,6 +493,14 @@ class IntelligentRealEstateBot:
             logger.info(f"Embedding meta salvo: {vector_id}")
         except Exception as e:
             logger.debug(f"Erro salvar embedding meta: {e}")
+
+    async def keep_presence_online(whatsapp_service, user_phone, stop_event: asyncio.Event):
+        try:
+            while not stop_event.is_set():
+                await whatsapp_service.send_presence(user_phone, "available")
+                await asyncio.sleep(30)  # envia a cada 30 segundos (ajuste conforme necessário)
+        except Exception as e:
+            logger.error(f"Erro no keep_presence_online: {e}")
 
 # Instância global do bot
 intelligent_bot = IntelligentRealEstateBot()

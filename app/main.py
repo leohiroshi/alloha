@@ -194,6 +194,7 @@ async def webhook_handler(request: Request):
     try:
         body = await request.json()
         logger.info(f"Received webhook payload: {body}")
+        stop_presence_event = asyncio.Event()
         
         # Processar mensagens recebidas
         if "messages" in body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}):
