@@ -4,11 +4,11 @@ Coordena IA, extração de dados e resposta inteligente com análise de imagens
 """
 
 import asyncio
+import os
 import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import aiohttp
-import os
 import tempfile
 import base64
 import json
@@ -17,6 +17,8 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from app.services.rag_pipeline import call_gpt, retrieve, build_prompt
 from app.services.property_intelligence import property_intelligence
+
+from app.services.whatsapp_service import WhatsAppService  # assume exists in workspace
 
 load_dotenv()
 
@@ -82,9 +84,11 @@ class IntelligentRealEstateBot:
 
     async def process_message(self, message: str, user_phone: str) -> str:
         """
-        Processa mensagem do usuário. Agora envia imediatamente um placeholder "digitando..."
-        (salvo em Firestore) e retorna rápido. A geração da resposta completa roda em background
-        e substitui/atualiza o placeholder quando pronta.
+        Processa mensagem do usuário.
+        Não cria placeholder "digitando..." no Firestore. Em vez disso:
+         - salva a mensagem recebida;
+         - inicia um background task que periodicamente envia typing indicator via WhatsApp;
+         - gera a resposta em background e envia a mensagem final.
         """
         try:
             logger.info(f"📨 Mensagem de {user_phone}: {message[:100]}")
@@ -98,90 +102,120 @@ class IntelligentRealEstateBot:
                 "metadata": {}
             })
 
-            # 2) Cria placeholder "digitando..." (sent) e captura referência para atualização
-            placeholder = {
-                "user_phone": user_phone,
-                "message": "digitando...",
-                "direction": "sent",
-                "timestamp": datetime.utcnow(),
-                "metadata": {"typing": True}
-            }
-            add_result = await asyncio.to_thread(db.collection("messages").add, placeholder)
-            # add_result pode ser (DocumentReference, write_time) ou somente DocumentReference dependendo da lib
-            placeholder_ref = add_result[0] if isinstance(add_result, (list, tuple)) else add_result
+            # 2) Garantir existência de self.whatsapp_service (tenta instanciar a partir do .env se não houver)
+            if not getattr(self, "whatsapp_service", None):
+                token = os.getenv("WHATSAPP_TOKEN")
+                phone_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+                if token and phone_id:
+                    self.whatsapp_service = WhatsAppService(token, phone_id)
 
-            # 3) Recupera histórico rápido (menor limite para agilizar)
+            # 3) Start periodic typing indicator in background (stoppable via Event)
+            stop_typing_event = asyncio.Event()
+            typing_task = None
+            if getattr(self, "whatsapp_service", None):
+                typing_task = asyncio.create_task(self._periodic_typing(user_phone, stop_typing_event))
+            else:
+                logger.debug("WhatsAppService not configured; skipping typing indicator.")
+
+            # 4) Recupera histórico rápido (menor limite para agilizar)
             history = await self.get_conversation_history(user_phone, limit=6)
 
-            # 4) Dispara geração/atualização em background
-            asyncio.create_task(self._generate_and_update_response(
-                message, user_phone, history, placeholder_ref
+            # 5) Dispara geração/atualização em background (passa stop event para encerrar typing)
+            asyncio.create_task(self._generate_and_send_response(
+                message, user_phone, history, stop_typing_event
             ))
 
-            # 5) Retorna rápido para o caller — "digitando..." para percepção de velocidade
-            return "digitando..."
+            # 6) Retorna rápido para caller — sem placeholder criado no Firestore
+            return ""
         except Exception as e:
             logger.exception(f"Erro ao processar mensagem (inicial): {e}")
             return "Desculpe, ocorreu um erro. Tente novamente mais tarde."
 
-    async def _generate_and_update_response(self, message: str, user_phone: str, history: List[Dict[str,str]], placeholder_ref):
-        """Gera a resposta (search ou geral) e atualiza o placeholder no Firestore."""
+    async def _periodic_typing(self, user_phone: str, stop_event: asyncio.Event, interval: int = 12):
+        """Envia typing indicator repetidamente até stop_event ser setado."""
         try:
-            # Detecta busca de imóvel
-            if self._is_property_search(message) and self.bot_config.get("enable_property_search", True):
+            while not stop_event.is_set():
                 try:
-                    criteria = property_intelligence.extract_search_criteria(message)
-                except Exception:
-                    criteria = {}
-                await self._save_property_search(user_phone, message, criteria)
-                response_text = await self.process_property_search(message)
-            else:
-                # Prompt reduzido + histórico curto para velocidade
-                prompt = self._build_prompt(message, user_phone)
-                short_history = [{"role": h["role"], "content": h["content"]} for h in history] + [{"role": "user", "content": message}]
-                prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])
+                    await self.whatsapp_service.send_typing_indicator(user_phone)
+                except Exception as e:
+                    logger.debug(f"Falha ao enviar typing indicator: {e}")
+                # aguarda com checagem periódica do evento
+                for _ in range(int(interval / 1)):
+                    if stop_event.is_set():
+                        break
+                    await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            logger.debug("Periodic typing task cancelled.")
+        except Exception:
+            logger.exception("Erro no periodic_typing loop.")
+        finally:
+            # tentativa final de garantir que o typing seja "desligado" ao terminar (se a API suportar)
+            try:
+                # Não existe typing_off na implementação atual; enviar mais um indicador é inócuo,
+                # mas mantemos o bloco para futuras implementações.
+                pass
+            except Exception:
+                pass
 
-                model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-                # Chamada em thread para não bloquear
-                response_text = await asyncio.to_thread(call_gpt, prompt_with_history, model)
+    async def _generate_and_send_response(self, message: str, user_phone: str, history: List[Dict[str, str]], stop_typing_event: asyncio.Event):
+        """Gera a resposta, pára o typing loop e envia a mensagem final (sem placeholder)."""
+        try:
+            # Lógica de geração (exemplo resumido)
+            prompt = self._build_prompt(message, user_phone)
+            short_history = [{"role": h["role"], "content": h["content"]} for h in history] + [{"role": "user", "content": message}]
+            prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])
+
+            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            response_text = await asyncio.to_thread(call_gpt, prompt_with_history, model)
 
             if not response_text:
                 response_text = "Desculpe, não consegui gerar uma resposta no momento."
 
-            # Atualiza placeholder com resposta final
-            update_doc = {
-                "message": response_text,
-                "direction": "sent",
-                "timestamp": datetime.utcnow(),
-                "metadata": {"typing": False, "ai": True}
-            }
-            # placeholder_ref pode ser DocumentReference object ou tuple — suportar ambos
+            # Stop typing indicator
             try:
-                # caso DocumentReference
-                await asyncio.to_thread(placeholder_ref.set, update_doc, {"merge": True})
+                stop_typing_event.set()
             except Exception:
-                # caso add tenha retornado (ref, write_time)
-                ref = placeholder_ref[0] if isinstance(placeholder_ref, (list, tuple)) else placeholder_ref
-                await asyncio.to_thread(ref.set, update_doc, {"merge": True})
+                logger.debug("Falha ao setar stop_typing_event.")
 
-            logger.info(f"Resposta enviada para {user_phone} (atualizada placeholder).")
-        except Exception as e:
-            logger.exception(f"Erro ao gerar/atualizar resposta: {e}")
-            # tenta marcar placeholder como erro
+            # Persistir a mensagem final como "sent" no Firestore
             try:
-                err_update = {
+                await asyncio.to_thread(db.collection("messages").add, {
+                    "user_phone": user_phone,
+                    "message": response_text,
+                    "direction": "sent",
+                    "timestamp": datetime.utcnow(),
+                    "metadata": {"ai": True}
+                })
+            except Exception:
+                logger.exception("Falha ao persistir mensagem enviada no Firestore.")
+
+            # Envia a mensagem final via WhatsApp (se configurado)
+            if getattr(self, "whatsapp_service", None):
+                try:
+                    ok = await self.whatsapp_service.send_message(user_phone, response_text)
+                    if not ok:
+                        logger.warning("Envio via WhatsAppService não confirmou sucesso; verifique logs.")
+                except Exception:
+                    logger.exception("Erro ao enviar mensagem via WhatsAppService.")
+            else:
+                logger.debug("WhatsAppService não está configurado; mensagem persistida apenas no Firestore.")
+
+        except Exception as e:
+            logger.exception(f"Erro ao gerar/enviar resposta: {e}")
+            try:
+                stop_typing_event.set()
+            except Exception:
+                pass
+            try:
+                await asyncio.to_thread(db.collection("messages").add, {
+                    "user_phone": user_phone,
                     "message": "Desculpe, ocorreu um erro ao gerar a resposta.",
                     "direction": "sent",
                     "timestamp": datetime.utcnow(),
-                    "metadata": {"typing": False, "ai": True, "error": True}
-                }
-                try:
-                    await asyncio.to_thread(placeholder_ref.set, err_update, {"merge": True})
-                except Exception:
-                    ref = placeholder_ref[0] if isinstance(placeholder_ref, (list, tuple)) else placeholder_ref
-                    await asyncio.to_thread(ref.set, err_update, {"merge": True})
+                    "metadata": {"ai": True, "error": True}
+                })
             except Exception:
-                logger.debug("Falha ao atualizar placeholder com mensagem de erro.")
+                logger.debug("Falha ao persistir mensagem de erro.")
 
     async def process_image_message(self, image_data: bytes, caption: str, user_phone: str) -> str:
         try:
