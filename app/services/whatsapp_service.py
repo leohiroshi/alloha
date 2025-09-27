@@ -11,6 +11,8 @@ class WhatsAppService:
         self.access_token = access_token
         self.phone_number_id = phone_number_id
         self.base_url = f"https://graph.facebook.com/v18.0/{phone_number_id}"
+        # URL única para chamadas que enviam/atualizam mensagens
+        self.messages_url = f"{self.base_url}/messages"
         self.headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
@@ -19,8 +21,7 @@ class WhatsAppService:
     async def send_message(self, to: str, message: str) -> bool:
         """Enviar mensagem de texto via WhatsApp"""
         try:
-            url = f"{self.base_url}/messages"
-            
+            url = self.messages_url
             payload = {
                 "messaging_product": "whatsapp",
                 "to": to,
@@ -149,6 +150,49 @@ class WhatsAppService:
                         
         except Exception as e:
             logger.error(f"Error sending WhatsApp template: {str(e)}")
+            return False
+    
+    async def mark_message_as_read(self, message_id: str) -> bool:
+        """Marcar uma mensagem como lida (exibe tiques azuis quando aplicável)."""
+        payload = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.messages_url, headers=self.headers, json=payload) as response:
+                    if 200 <= response.status < 300:
+                        logger.info(f"Message {message_id} marked as read.")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to mark as read: {response.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.error(f"Error marking message as read: {str(e)}")
+            return False
+    
+    async def send_typing_indicator(self, to: str) -> bool:
+        """Enviar o status 'digitando...' — note que a WhatsApp Cloud API oficial pode não suportar typing indicator.
+        Implementado conforme solicitado; verifique comportamento no seu número/versão da API."""
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "typing",
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.messages_url, headers=self.headers, json=payload) as response:
+                    if 200 <= response.status < 300:
+                        logger.info(f"Typing indicator sent to {to}.")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to send typing indicator: {response.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.error(f"Error sending typing indicator: {str(e)}")
             return False
     
     def is_configured(self) -> bool:
