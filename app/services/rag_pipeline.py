@@ -196,11 +196,10 @@ def build_prompt(question: str, retrieved: List[dict]) -> str:
 
 def call_gpt(prompt: str, model_name: str = None, max_tokens: int = 512, temperature: float = None) -> str:
     """
-    Robust call to OpenAI chat completions (synchronous; call via asyncio.to_thread).
-    - uses a safe default model (gpt-3.5-turbo) unless overridden by env/model_name
-    - uses 'max_tokens' param (compatible with OpenAI chat endpoint)
-    - tolerant extraction of content from different response shapes
-    - returns a configurable fallback text instead of raising when API returns empty
+    Chamada única ao OpenAI chat completions (síncrona).
+    - remove envio de `max_tokens` na payload (usa default do modelo);
+    - remove loop de retries (apenas 1 tentativa);
+    - em caso de erro ou resposta vazia, retorna texto fallback configurável.
     """
     model = model_name or (OPENAI_CHAT_MODEL if 'OPENAI_CHAT_MODEL' in globals() else os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"))
     if not OPENAI_API_KEY or openai_client is None:
@@ -208,82 +207,53 @@ def call_gpt(prompt: str, model_name: str = None, max_tokens: int = 512, tempera
 
     def _extract_content_from_resp(resp_obj) -> str:
         try:
-            # Try attribute style (OpenAIObject)
             choices = getattr(resp_obj, "choices", None) or (resp_obj.get("choices") if isinstance(resp_obj, dict) else None)
             if choices and len(choices) > 0:
                 choice = choices[0]
-                # object-style: choice.message.content
                 msg = getattr(choice, "message", None) or (choice.get("message") if isinstance(choice, dict) else None)
                 if msg:
                     if isinstance(msg, dict):
                         return (msg.get("content") or "").strip()
                     if hasattr(msg, "content"):
                         return (msg.content or "").strip()
-                # fallback: choice.text or choice.get("text")
                 if isinstance(choice, dict):
                     return (choice.get("text") or "") or ""
                 return (getattr(choice, "text", "") or "").strip()
-            # dict fallback
             if isinstance(resp_obj, dict):
                 return (resp_obj.get("text") or resp_obj.get("output") or "") or ""
         except Exception:
             return ""
         return ""
 
-    # Build request payload using chat completions
+    # Build request payload WITHOUT max_tokens (use model default)
     kwargs = {
         "model": model,
         "messages": [
             {"role": "system", "content": "Você é Sofia, assistente virtual da Allega Imóveis. Responda de forma concisa e profissional."},
             {"role": "user", "content": prompt}
         ],
-        "max_tokens": max_tokens
     }
     if temperature is not None and temperature != 0.0:
         kwargs["temperature"] = float(temperature)
 
-    max_attempts = 3
-    backoff = 0.8
-    last_exc = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            logger.info("Calling OpenAI model=%s attempt=%d prompt_len=%d", model, attempt, len(prompt))
-            resp = openai_client.chat.completions.create(**kwargs)
-
-            # debug raw response truncated
-            try:
-                logger.debug("OpenAI raw response (truncated): %s", repr(resp)[:2000])
-            except Exception:
-                logger.debug("OpenAI raw response received (could not repr).")
-
-            content = _extract_content_from_resp(resp)
-            if content:
-                return content
-
-            logger.warning("OpenAI returned empty content (attempt=%d).", attempt)
-            last_exc = RuntimeError("OpenAI returned empty content")
-        except Exception as e:
-            last_exc = e
-            logger.exception("OpenAI request failed on attempt %d: %s", attempt, e)
-
-        if attempt < max_attempts:
-            time.sleep(backoff * attempt)
-
-    # After retries, log and return fallback (do not crash the bot)
-    logger.error("OpenAI call failed after %d attempts. Last error: %s", max_attempts, str(last_exc))
-    # attempt to log last raw resp deeper if present
     try:
-        if 'resp' in locals():
-            try:
-                resp_dict = resp.to_dict() if hasattr(resp, "to_dict") else (resp if isinstance(resp, dict) else None)
-                logger.debug("OpenAI last raw response dict (truncated): %s", repr(resp_dict)[:4000])
-            except Exception:
-                logger.debug("Could not extract dict from last OpenAI response.")
-    except Exception:
-        pass
+        logger.info("Calling OpenAI model=%s prompt_len=%d (single attempt)", model, len(prompt))
+        resp = openai_client.chat.completions.create(**kwargs)
+        try:
+            logger.debug("OpenAI raw response (truncated): %s", repr(resp)[:2000])
+        except Exception:
+            logger.debug("OpenAI raw response received (could not repr).")
 
+        content = _extract_content_from_resp(resp)
+        if content:
+            return content
+
+        logger.warning("OpenAI returned empty content on single attempt; returning fallback.")
+    except Exception as e:
+        logger.exception("OpenAI request failed: %s", e)
+
+    # fallback text (env override)
     fallback_text = os.getenv("OPENAI_FALLBACK_TEXT", "Desculpe, não consegui gerar uma resposta agora. Por favor, tente novamente em alguns instantes.")
-    logger.warning("Returning fallback response to caller due to OpenAI failures.")
     return fallback_text
 
 # EXEMPLO DE USO
