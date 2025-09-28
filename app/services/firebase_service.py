@@ -1,5 +1,6 @@
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.cloud.firestore_v1 import FieldFilter
 import json
 import logging
 import os
@@ -114,9 +115,9 @@ class FirebaseService:
                 return []
             
             messages_ref = self.db.collection("messages")
-            # Use argumentos nomeados para where para evitar warnings do SDK
+            # use FieldFilter to avoid SDK UserWarning and run filter server-side
             query = (messages_ref
-                    .where(field_path="user_phone", op_string="==", value=user_phone)
+                    .where(filter=FieldFilter("user_phone", "==", user_phone))
                     .order_by("timestamp", direction=firestore.Query.DESCENDING)
                     .limit(limit))
             
@@ -200,8 +201,8 @@ class FirebaseService:
             
             # Contar mensagens totais
             messages_ref = self.db.collection("messages")
-            # use argumentos nomeados para where para evitar warning do SDK
-            query = messages_ref.where(field_path="user_phone", op_string="==", value=user_phone)
+            # use FieldFilter to avoid SDK warning
+            query = messages_ref.where(filter=FieldFilter("user_phone", "==", user_phone))
             docs = list(query.stream())
             
             if not docs:
@@ -309,8 +310,8 @@ class FirebaseService:
                 logger.error("❌ Firebase não inicializado")
                 return False
             
-            # Buscar e deletar todas as mensagens do usuário (use argumentos nomeados para where)
-            messages_ref = self.db.collection('messages').where(field_path="user_phone", op_string="==", value=user_phone)
+            # Buscar e deletar todas as mensagens do usuário usando FieldFilter
+            messages_ref = self.db.collection('messages').where(filter=FieldFilter("user_phone", "==", user_phone))
             docs = messages_ref.stream()
             
             deleted_count = 0

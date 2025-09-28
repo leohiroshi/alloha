@@ -126,10 +126,40 @@ class IntelligentRealEstateBot:
     async def _generate_and_send_response(self, message: str, user_phone: str, history: List[Dict[str, str]]):
         """Gera a resposta, pára o typing loop e envia a mensagem final (sem placeholder)."""
         try:
-            # Lógica de geração (exemplo resumido)
+            # Normalizar histórico: aceitar formatos {role, content} ou {direction, message} ou firestore doc shape
+            def _normalize_history(raw_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+                normalized = []
+                for h in raw_history or []:
+                    try:
+                        if isinstance(h, dict):
+                            if "role" in h and "content" in h:
+                                normalized.append({"role": h["role"], "content": h["content"]})
+                                continue
+                            # Firestore saved message shape
+                            if "direction" in h and "message" in h:
+                                role = "user" if h.get("direction") == "received" else "assistant"
+                                normalized.append({"role": role, "content": h.get("message", "")})
+                                continue
+                            # Alternative firestore doc shape used in firebase_service: keys id, message, direction
+                            if "message" in h and "direction" in h:
+                                role = "user" if h.get("direction") == "received" else "assistant"
+                                normalized.append({"role": role, "content": h.get("message", "")})
+                                continue
+                            # If payload is nested (ex: webhook message)
+                            if "text" in h and isinstance(h["text"], dict) and "body" in h["text"]:
+                                normalized.append({"role": "user", "content": h["text"]["body"]})
+                                continue
+                        # Fallback: stringify
+                        normalized.append({"role": "user", "content": str(h)})
+                    except Exception:
+                        # ignore malformed entries
+                        continue
+                return normalized
+
             logger.info(f"Gerando resposta para {user_phone}...")
             prompt = self._build_prompt(message, user_phone)
-            short_history = [{"role": h["role"], "content": h["content"]} for h in history] + [{"role": "user", "content": message}]
+            normalized_history = _normalize_history(history)
+            short_history = normalized_history + [{"role": "user", "content": message}]
             prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])
 
             model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
