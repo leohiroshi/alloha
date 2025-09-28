@@ -162,6 +162,7 @@ class IntelligentRealEstateBot:
             normalized_history = _normalize_history(history)
             short_history = normalized_history + [{"role": "user", "content": message}]
             prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])
+            logger.info(f"Prompt com histórico para {user_phone}:\n{prompt_with_history[:1000]}")
 
             model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
             response_text = await asyncio.to_thread(call_gpt, prompt_with_history, model)
