@@ -162,6 +162,9 @@ class WhatsAppService:
             "messaging_product": "whatsapp",
             "status": "read",
             "message_id": message_id,
+            "typing_indicator": {
+                "type": "text"
+            }
         }
         try:
             async with aiohttp.ClientSession() as session:
@@ -174,53 +177,6 @@ class WhatsAppService:
                     return False
         except Exception as e:
             logger.exception("Error marking message as read: %s", e)
-            return False
-
-    async def send_typing_on(self, to: str) -> bool:
-        """Tentar enviar 'typing_on' (pode ser rejeitado pela Cloud API)."""
-        logger.info("Attempting to send typing_on to %s", to)
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "typing_on"
-        }
-        try:
-            logger.info("Sending typing_on payload: %s", payload)
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.messages_url, headers=self.headers, json=payload, timeout=10) as response:
-                    resp_text = await response.text()
-                    if 200 <= response.status < 300:
-                        logger.info("Typing_on indicator sent to %s", to)
-                        return True
-                    logger.error("Failed to send typing_on: %s - %s", response.status, resp_text[:1000])
-                    return False
-        except Exception as e:
-            logger.exception("Error sending typing_on: %s", e)
-            return False
-
-    async def send_presence(self, to: str, presence: str = "available") -> bool:
-        """
-        Enviar presença (online/offline).
-        presence: "available" (online) or "unavailable" (offline)
-        """
-        logger.info("Attempting to send presence '%s' to %s", presence, to)
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "typing_on"
-        }
-        try:
-            logger.info("Sending presence '%s' to %s", presence, to)
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.messages_url, headers=self.headers, json=payload, timeout=10) as response:
-                    resp_text = await response.text()
-                    if 200 <= response.status < 300:
-                        logger.info("Presence '%s' sent to %s", presence, to)
-                        return True
-                    logger.error("Failed to send presence: %s - %s", response.status, resp_text[:1000])
-                    return False
-        except Exception as e:
-            logger.exception("Error sending presence: %s", e)
             return False
 
     def is_configured(self) -> bool:

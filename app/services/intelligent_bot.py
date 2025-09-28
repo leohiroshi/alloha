@@ -117,17 +117,8 @@ class IntelligentRealEstateBot:
                     logger.error("WhatsAppService não configurado corretamente.")
                     return "Erro interno: serviço indisponível."
 
-            try:
-                logger.info(f"Inicializando Send_presence para {user_phone}.")
-                asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "available"))
-            except Exception:
-                logger.debug("Falha ao disparar send_presence(available) em background.")
-
             # 3) Start periodic typing indicator in background (stoppable via Event)
             stop_typing_event = asyncio.Event()
-            logger.info(f"Iniciando loop de typing indicator para {user_phone}.")
-            await self.whatsapp_service.send_presence(user_phone, "available")
-            logger.info(f"Loop de typing indicator iniciado para {user_phone}.")
 
             # 4) Recupera histórico rápido (menor limite para agilizar)
             history = await self.get_conversation_history(user_phone, limit=6)
@@ -142,38 +133,6 @@ class IntelligentRealEstateBot:
         except Exception as e:
             logger.exception(f"Erro ao processar mensagem (inicial): {e}")
             return "Desculpe, ocorreu um erro. Tente novamente mais tarde."
-
-    async def _periodic_typing(self, user_phone: str, stop_event: asyncio.Event, interval: int = 12):
-        """Envia typing indicator repetidamente até stop_event ser setado."""
-        try:
-            logger.info(f"Periodic typing task started for {user_phone} with interval {interval}s.")
-            while not stop_event.is_set():
-                try:
-                    logger.info(f"Enviando typing indicator para {user_phone}.")
-                    # chama o método typing_on da sua WhatsAppService
-                    await self.whatsapp_service.send_typing_on(user_phone)
-                except Exception as e:
-                    logger.debug(f"Falha ao enviar typing indicator: {e}")
-                # aguarda com checagem periódica do evento
-                for _ in range(int(interval / 1)):
-                    if stop_event.is_set():
-                        break
-                    await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            logger.debug("Periodic typing task cancelled.")
-        except Exception:
-            logger.exception("Erro no periodic_typing loop.")
-        finally:
-            # tentativa final de garantir que o typing seja "desligado" ao terminar (se a API suportar)
-            try:
-                # se o serviço suportar presence, marcar como offline ao final (fire-and-forget)
-                if getattr(self, "whatsapp_service", None) and getattr(self.whatsapp_service, "supports_presence", False):
-                    try:
-                        asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "unavailable"))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
 
     async def _generate_and_send_response(self, message: str, user_phone: str, history: List[Dict[str, str]], stop_typing_event: asyncio.Event):
         """Gera a resposta, pára o typing loop e envia a mensagem final (sem placeholder)."""
