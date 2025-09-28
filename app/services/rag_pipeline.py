@@ -204,35 +204,80 @@ def call_gpt(prompt: str, model_name: str = None, max_tokens: int = 512, tempera
     model = model_name or (OPENAI_CHAT_MODEL if 'OPENAI_CHAT_MODEL' in globals() else os.getenv("OPENAI_MODEL", "gpt-5-mini"))
     if not OPENAI_API_KEY or openai_client is None:
         raise RuntimeError("OPENAI_API_KEY not configured; cannot call OpenAI chat API")
-    try:
-        kwargs = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "Você é Sofia, assistente virtual da Allega Imóveis. Responda de forma concisa e profissional."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_completion_tokens": max_tokens
-        }
+    def _extract_content_from_resp(resp_obj) -> str:
+        """Tenta extrair conteúdo da resposta suportando várias estruturas."""
+        try:
+            # choice-first shape
+            choices = getattr(resp_obj, "choices", None) or (resp_obj.get("choices") if isinstance(resp_obj, dict) else None)
+            if choices and len(choices) > 0:
+                choice = choices[0]
+                # choice.message.content (obj or dict)
+                msg = getattr(choice, "message", None) or (choice.get("message") if isinstance(choice, dict) else None)
+                if isinstance(msg, dict):
+                    content = msg.get("content")
+                    if content:
+                        return content
+                else:
+                    # object with attribute .content
+                    if msg and hasattr(msg, "content"):
+                        return msg.content
+                # fallbacks
+                # some clients return choice.text or choice.get("text")
+                if isinstance(choice, dict):
+                    return (choice.get("text") or choice.get("message", {}) and choice.get("message", {}).get("content") or "") or ""
+                return getattr(choice, "text", "") or ""
+            # older/simple responses: try resp_obj.get("text") or resp_obj.get("output")
+            if isinstance(resp_obj, dict):
+                return (resp_obj.get("text") or resp_obj.get("output") or "") or ""
+        except Exception:
+            return ""
+        return ""
 
-        # incluir temperature apenas se fornecido (None => use default do modelo)
-        if temperature is not None:
-            # alguns modelos não aceitam 0.0; se receber 0.0, omita para usar default
-            if temperature == 0.0:
-                pass
-            else:
-                kwargs["temperature"] = float(temperature)
+    # build request payload
+    kwargs = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Você é Sofia, assistente virtual da Allega Imóveis. Responda de forma concisa e profissional."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_completion_tokens": max_tokens
+    }
+    if temperature is not None and temperature != 0.0:
+        kwargs["temperature"] = float(temperature)
 
-        resp = openai_client.chat.completions.create(**kwargs)
+    max_attempts = 3
+    backoff = 0.8
+    last_exc = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logger.info("Calling OpenAI model=%s attempt=%d prompt_len=%d", model, attempt, len(prompt))
+            resp = openai_client.chat.completions.create(**kwargs)
+            # debug truncated raw response
+            try:
+                raw_repr = repr(resp)
+                logger.debug("OpenAI raw response (truncated): %s", raw_repr[:2000])
+            except Exception:
+                logger.debug("OpenAI response received (could not repr).")
 
-        # new response structure: resp.choices[0].message.content
-        choice = resp.choices[0]
-        content = getattr(choice.message, "content", None) if hasattr(choice, "message") else None
-        if content is None:
-            content = (choice.get("message", {}) or {}).get("content") if isinstance(choice, dict) else None
-        return (content or "").strip()
-    except Exception:
-        logger.exception("OpenAI request failed")
-        raise
+            content = _extract_content_from_resp(resp)
+            content = (content or "").strip()
+            if content:
+                return content
+
+            # empty content -> log full structure truncated and retry
+            logger.warning("OpenAI returned empty content (attempt=%d). Raw resp truncated to 2000 chars in debug logs.", attempt)
+            last_exc = RuntimeError("OpenAI returned empty content")
+        except Exception as e:
+            last_exc = e
+            logger.exception("OpenAI request failed on attempt %d: %s", attempt, e)
+
+        # backoff before retry
+        if attempt < max_attempts:
+            time.sleep(backoff * attempt)
+
+    # após tentativas, logar e levantar erro
+    logger.error("OpenAI call failed after %d attempts. Last error: %s", max_attempts, str(last_exc))
+    raise last_exc or RuntimeError("OpenAI call failed without explicit exception")
 
 # EXEMPLO DE USO
 if __name__ == "__main__":

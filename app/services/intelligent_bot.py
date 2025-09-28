@@ -126,6 +126,7 @@ class IntelligentRealEstateBot:
     async def _generate_and_send_response(self, message: str, user_phone: str, history: List[Dict[str, str]]):
         """Gera a resposta, pára o typing loop e envia a mensagem final (sem placeholder)."""
         try:
+            logger.info(f"Iniciando geração de resposta para {user_phone}...")
             # Normalizar histórico: aceitar formatos {role, content} ou {direction, message} ou firestore doc shape
             def _normalize_history(raw_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
                 normalized = []

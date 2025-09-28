@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 class FirebaseService:
     def __init__(self):
-        logger.info("🔄 Inicializando FirebaseService...")
         self.db = None
         self._initialize_firebase()
     
@@ -24,8 +23,6 @@ class FirebaseService:
         """Inicializar Firebase"""
         try:
             firebase_credentials = os.getenv("FIREBASE_CREDENTIALS")
-            logger.info(f"🔑 Firebase Credentials: {'Set' if firebase_credentials else 'Not Set'}")
-
             # Verificar se já foi inicializado
             if firebase_admin._apps:
                 logger.info("✅ Firebase já inicializado")
