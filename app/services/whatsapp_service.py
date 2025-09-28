@@ -203,13 +203,14 @@ class WhatsAppService:
         Enviar presença (online/offline).
         presence: "available" (online) or "unavailable" (offline)
         """
+        logger.info("Attempting to send presence '%s' to %s", presence, to)
         payload = {
             "messaging_product": "whatsapp",
             "to": to,
-            "type": "presence",
-            "presence": presence
+            "type": "typing_on"
         }
         try:
+            logger.info("Sending presence '%s' to %s", presence, to)
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.messages_url, headers=self.headers, json=payload, timeout=10) as response:
                     resp_text = await response.text()
