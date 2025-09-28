@@ -108,8 +108,17 @@ class IntelligentRealEstateBot:
             })
             logger.info(f"Mensagem salva no Firestore para {user_phone}.")
 
+            if self.whatsapp_service is None:
+                token = os.getenv("WHATSAPP_TOKEN")
+                phone_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+                if token and phone_id:
+                    self.whatsapp_service = WhatsAppService(token, phone_id)
+                else:
+                    logger.error("WhatsAppService não configurado corretamente.")
+                    return "Erro interno: serviço indisponível."
+
             try:
-                logger.info(f"Inicializando WhatsAppService para {user_phone}.")
+                logger.info(f"Inicializando Send_presence para {user_phone}.")
                 asyncio.create_task(self.whatsapp_service.send_presence(user_phone, "available"))
             except Exception:
                 logger.debug("Falha ao disparar send_presence(available) em background.")
