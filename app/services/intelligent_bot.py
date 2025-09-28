@@ -109,7 +109,7 @@ class IntelligentRealEstateBot:
             logger.info(f"Mensagem salva no Firestore para {user_phone}.")
 
             if self.whatsapp_service is None:
-                token = os.getenv("WHATSAPP_TOKEN")
+                token = os.getenv("WHATSAPP_ACCESS_TOKEN")
                 phone_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
                 if token and phone_id:
                     self.whatsapp_service = WhatsAppService(token, phone_id)
