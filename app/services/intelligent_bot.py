@@ -117,15 +117,12 @@ class IntelligentRealEstateBot:
                     logger.error("WhatsAppService não configurado corretamente.")
                     return "Erro interno: serviço indisponível."
 
-            # 3) Start periodic typing indicator in background (stoppable via Event)
-            stop_typing_event = asyncio.Event()
-
             # 4) Recupera histórico rápido (menor limite para agilizar)
             history = await self.get_conversation_history(user_phone, limit=6)
 
-            # 5) Dispara geração/atualização em background (passa stop event para encerrar typing)
+            # 5) Dispara geração/atualização em background (passa None como stop_event)
             asyncio.create_task(self._generate_and_send_response(
-                message, user_phone, history, stop_typing_event
+                message, user_phone, history
             ))
 
             # 6) Retorna rápido para caller — sem placeholder criado no Firestore
@@ -134,7 +131,7 @@ class IntelligentRealEstateBot:
             logger.exception(f"Erro ao processar mensagem (inicial): {e}")
             return "Desculpe, ocorreu um erro. Tente novamente mais tarde."
 
-    async def _generate_and_send_response(self, message: str, user_phone: str, history: List[Dict[str, str]], stop_typing_event: asyncio.Event):
+    async def _generate_and_send_response(self, message: str, user_phone: str, history: List[Dict[str, str]]):
         """Gera a resposta, pára o typing loop e envia a mensagem final (sem placeholder)."""
         try:
             # Lógica de geração (exemplo resumido)
@@ -147,12 +144,6 @@ class IntelligentRealEstateBot:
 
             if not response_text:
                 response_text = "Desculpe, não consegui gerar uma resposta no momento."
-
-            # Stop typing indicator
-            try:
-                stop_typing_event.set()
-            except Exception:
-                logger.debug("Falha ao setar stop_typing_event.")
 
             # Persistir a mensagem final como "sent" no Firestore
             try:
@@ -179,10 +170,6 @@ class IntelligentRealEstateBot:
 
         except Exception as e:
             logger.exception(f"Erro ao gerar/enviar resposta: {e}")
-            try:
-                stop_typing_event.set()
-            except Exception:
-                pass
             try:
                 await asyncio.to_thread(db.collection("messages").add, {
                     "user_phone": user_phone,
