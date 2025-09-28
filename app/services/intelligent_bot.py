@@ -19,6 +19,7 @@ from app.services.rag_pipeline import call_gpt, retrieve, build_prompt
 from app.services.property_intelligence import property_intelligence
 
 from app.services.whatsapp_service import WhatsAppService  # assume exists in workspace
+from app.services.firebase_service import firebase_service
 
 load_dotenv()
 
@@ -70,22 +71,13 @@ class IntelligentRealEstateBot:
         self.whatsapp_supports_presence = False
         logger.info("Bot de Inteligência Imobiliária iniciado")
 
-    def _get_conversation_history_sync(self, user_phone, limit=10) -> List[Dict[str, str]]:
-        """Sincrono: busca mensagens no Firestore (para ser executado em thread)."""
-        messages_ref = db.collection("messages")
-        query = messages_ref.where("user_phone", "==", user_phone).order_by("timestamp", direction=firestore.Query.DESCENDING).limit(limit)
-        docs = list(query.stream())
-        history = []
-        for d in docs:
-            rec = d.to_dict() or {}
-            role = "user" if rec.get("direction") == "received" else "assistant"
-            history.append({"role": role, "content": rec.get("message", "")})
-        # retorna em ordem cronológica (mais antiga → mais recente)
-        return list(reversed(history))
-
     async def get_conversation_history(self, user_phone, limit=10) -> List[Dict[str, str]]:
-        """Async wrapper que executa a busca síncrona em thread para não bloquear o loop."""
-        return await asyncio.to_thread(self._get_conversation_history_sync, user_phone, limit)
+        """Delega ao FirebaseService para obter histórico de conversa (async)."""
+        try:
+            return await firebase_service.get_conversation_history(user_phone, limit)
+        except Exception as e:
+            logger.debug(f"Falha ao obter histórico via FirebaseService: {e}")
+            return []
 
     async def process_message(self, message: str, user_phone: str) -> str:
         """
@@ -135,6 +127,7 @@ class IntelligentRealEstateBot:
         """Gera a resposta, pára o typing loop e envia a mensagem final (sem placeholder)."""
         try:
             # Lógica de geração (exemplo resumido)
+            logger.info(f"Gerando resposta para {user_phone}...")
             prompt = self._build_prompt(message, user_phone)
             short_history = [{"role": h["role"], "content": h["content"]} for h in history] + [{"role": "user", "content": message}]
             prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])

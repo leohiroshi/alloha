@@ -109,12 +109,14 @@ class FirebaseService:
     async def get_conversation_history(self, user_phone: str, limit: int = 10) -> List[Dict]:
         """Obter histórico de conversa"""
         try:
+            logger.info(f"🔍 Obtendo histórico de conversa para {user_phone} (limit={limit})")
             if not self.db:
                 return []
             
             messages_ref = self.db.collection("messages")
+            # Use argumentos nomeados para where para evitar warnings do SDK
             query = (messages_ref
-                    .where("user_phone", "==", user_phone)
+                    .where(field_path="user_phone", op_string="==", value=user_phone)
                     .order_by("timestamp", direction=firestore.Query.DESCENDING)
                     .limit(limit))
             
@@ -198,7 +200,8 @@ class FirebaseService:
             
             # Contar mensagens totais
             messages_ref = self.db.collection("messages")
-            query = messages_ref.where("user_phone", "==", user_phone)
+            # use argumentos nomeados para where para evitar warning do SDK
+            query = messages_ref.where(field_path="user_phone", op_string="==", value=user_phone)
             docs = list(query.stream())
             
             if not docs:
@@ -306,8 +309,8 @@ class FirebaseService:
                 logger.error("❌ Firebase não inicializado")
                 return False
             
-            # Buscar e deletar todas as mensagens do usuário
-            messages_ref = self.db.collection('messages').where('user_phone', '==', user_phone)
+            # Buscar e deletar todas as mensagens do usuário (use argumentos nomeados para where)
+            messages_ref = self.db.collection('messages').where(field_path="user_phone", op_string="==", value=user_phone)
             docs = messages_ref.stream()
             
             deleted_count = 0
