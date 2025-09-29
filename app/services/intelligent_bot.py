@@ -350,12 +350,55 @@ class IntelligentRealEstateBot:
         Fallback: se retrieve/local falhar, tenta chamar RAG_ENDPOINT HTTP.
         """
         try:
-            # 1) recuperar localmente (await!)
-            retrieved = await rag.retrieve(user_query, top_k=5, filters={})
-            logger.info(f"RAG retrieved {len(retrieved) if retrieved is not None else 0} documents for query: {user_query}")
+            # 1) recuperar localmente (await!) -- buscar mais candidates para melhor grounding
+            retrieved = await rag.retrieve(user_query, top_k=8, filters={})
+            hits = retrieved or []
+            logger.info("RAG retrieved %d documents for query: %s", len(hits), user_query)
+            # DEBUG: log resumido de cada hit (id / first 200 chars / keys metadata)
+            for i, h in enumerate(hits):
+                try:
+                    if isinstance(h, dict):
+                        txt = (h.get("text") or h.get("content") or "")[:200]
+                        meta = h.get("meta") or h.get("metadata") or {}
+                        hid = h.get("id") or meta.get("id") or f"unknown_{i}"
+                    else:
+                        txt = (getattr(h, "text", None) or getattr(h, "content", None) or str(h))[:200]
+                        meta = getattr(h, "meta", {}) or {}
+                        hid = getattr(h, "id", None) or f"unknown_{i}"
+                    logger.debug("RAG hit %d: id=%s snippet=%s meta_keys=%s", i, hid, txt, list(meta.keys()))
+                except Exception:
+                    logger.debug("RAG hit %d: could not serialize", i)
 
-            prompt = rag.build_prompt(user_query, retrieved)
-            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            # 2) build_prompt (if returns small/empty, build explicit prompt including doc snippets)
+            prompt = rag.build_prompt(user_query, retrieved) if hasattr(rag, "build_prompt") else ""
+            if not prompt or len(prompt) < 200:
+                # montar prompt explícito com top 3 doc summaries para garantir grounding
+                parts = [
+                    "Você é Sofia, assistente virtual da Allega Imóveis. Use os documentos abaixo para responder objetivamente.",
+                    f"Consulta do usuário: {user_query}",
+                    "Documentos relevantes:"
+                ]
+                for i, h in enumerate(hits[: self.bot_config.get("max_properties_per_response", 3)]):
+                    meta = {}
+                    text = ""
+                    if isinstance(h, dict):
+                        meta = h.get("meta") or h.get("metadata") or {}
+                        text = h.get("text") or h.get("content") or ""
+                        hid = h.get("id") or meta.get("id") or f"unknown_{i}"
+                    else:
+                        meta = getattr(h, "meta", {}) or {}
+                        text = getattr(h, "text", None) or getattr(h, "content", None) or str(h)
+                        hid = getattr(h, "id", None) or f"unknown_{i}"
+                    parts.append(
+                        f"DOCUMENT {i+1} - id:{hid} | snippet: {text[:300]} | neighborhood: {meta.get('neighborhood') or meta.get('bairro') or 'n/a'} | price: {meta.get('price') or meta.get('valor') or 'n/a'} | url:{meta.get('url') or ''}"
+                    )
+                parts.append(
+                    "Instruções: Resuma até 3 opções com título, bairro, preço e link (quando houver). Seja objetivo e proponha próximos passos."
+                )
+                prompt = "\n\n".join(parts)
+
+            logger.debug("Final RAG prompt (truncated 3000): %s", (prompt or "")[:3000])
+            model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
             answer = await asyncio.to_thread(rag.call_gpt, prompt, model)
 
             # construir candidates para exibição (suporta várias shapes)
