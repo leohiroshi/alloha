@@ -114,7 +114,7 @@ class IntelligentRealEstateBot:
 
             # 5) Se for busca por imóvel, dispare tarefa específica de busca+envio.
             #    Assim garantimos que process_property_search seja chamado.
-            if self._is_property_search(message):
+            if await self._is_property_search(message):
                 logger.info("Mensagem identificada como busca de imóvel — iniciando fluxo de property_search em background.")
                 asyncio.create_task(self._process_property_search_and_send(message, user_phone, history))
             else:
@@ -346,86 +346,184 @@ class IntelligentRealEstateBot:
 
     async def process_property_search(self, user_query: str) -> tuple[str, list]:
         """
-        Busca imóveis usando RAG local.
+        Busca imóveis usando RAG local com resposta mais natural.
         Retorna: (resposta_texto, lista_de_imoveis_estruturados)
         """
         try:
-            # 1) recuperar localmente (await!)
-            retrieved = await rag.retrieve(user_query, top_k=8, filters={})
-            hits = retrieved or []
-            logger.info("RAG retrieved %d documents for query: %s", len(hits), user_query)
+            # 1) Buscar documentos relevantes
+            retrieved_docs = await self._retrieve_property_documents(user_query)
+            if not retrieved_docs:
+                return self._handle_no_results(), []
 
-            # 2) Normalizar retrieved para texto + metadados
-            normalized_hits = []
-            structured_properties = []  # 👈 NOVO: lista estruturada para CTA
+            # 2) Processar e estruturar dados
+            normalized_hits, structured_properties = self._process_retrieved_documents(retrieved_docs)
             
-            for idx, r in enumerate(hits):
-                meta = {}
-                text = ""
-                rid = None
-                
-                if isinstance(r, dict):
-                    meta = r.get("meta") or r.get("metadata") or r.get("meta_data") or {}
-                    text = (r.get("text") or r.get("content") or r.get("snippet") or "").strip()
-                    rid = r.get("id") or r.get("doc_id") or meta.get("id")
-                else:
-                    try:
-                        meta = getattr(r, "meta", {}) or getattr(r, "metadata", {}) or {}
-                        text = (getattr(r, "text", None) or getattr(r, "content", None) or "")
-                        rid = getattr(r, "id", None)
-                    except Exception:
-                        text = str(r)
-
-                normalized_hits.append({
-                    "id": rid or f"unknown_{idx}",
-                    "text": (text or "")[:1200],
-                    "meta": meta
-                })
-                
-                # 👈 NOVO: Estruturar dados para CTA (se tiver URL válida)
-                if meta.get("url") and meta.get("url").startswith("http"):
-                    structured_properties.append({
-                        "id": rid or f"unknown_{idx}",
-                        "title": self._extract_title_from_text(text) or f"Imóvel em {meta.get('neighborhood', 'Curitiba')}",
-                        "description": text[:200],
-                        "url": meta.get("url"),
-                        "main_image": meta.get("main_image") or meta.get("image"),
-                        "neighborhood": meta.get("neighborhood") or meta.get("bairro"),
-                        "price": meta.get("price") or meta.get("valor"),
-                        "bedrooms": meta.get("bedrooms") or meta.get("quartos")
-                    })
-
-            # 3) construir prompt (mesmo código anterior)
-            top_n = self.bot_config.get("max_properties_per_response", 3)
-            prompt_parts = [
-                "Você é Sofia, assistente virtual da Allega Imóveis em Curitiba. Use os documentos abaixo para responder objetivamente.",
-                f"Consulta do usuário: {user_query}",
-                "Documentos relevantes (use esses dados para listar imóveis e incluir URLs/imagens quando existirem):"
-            ]
+            # 3) Gerar resposta natural via LLM
+            response_text = await self._generate_natural_response(user_query, normalized_hits)
             
-            for i, h in enumerate(normalized_hits[:top_n]):
-                m = h.get("meta", {}) or {}
-                prompt_parts.append(
-                    f"DOCUMENT {i+1} - id:{h.get('id')} | snippet: {h.get('text')[:300]} | neighborhood: {m.get('neighborhood') or m.get('bairro') or 'n/a'} | price: {m.get('price') or m.get('valor') or 'n/a'} | url: {m.get('url') or ''} | image: {m.get('main_image') or m.get('image') or ''}"
-                )
-                
-            prompt_parts.append(
-                "Instruções: 1) Resuma e proponha até 3 opções mostrando título/snippet, bairro, preço (se disponível) e link quando houver. 2) Seja objetivo, cordial e proponha próximos passos (visita/contato). 3) Se não houver resultados relevantes, diga claramente que não encontrou."
-            )
-            prompt = "\n\n".join(prompt_parts)
-
-            # 4) chamar LLM
-            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
-            answer = await asyncio.to_thread(rag.call_gpt, prompt, model)
-
-            if not answer:
-                answer = "Desculpe, não encontrei imóveis com essas características."
-
-            return answer, structured_properties  # 👈 NOVO: retorna tupla
+            return response_text, structured_properties
 
         except Exception as e:
-            logger.exception(f"Erro RAG local: {e}")
-            return "Erro técnico buscando imóveis. Tente novamente mais tarde.", []
+            logger.exception(f"Erro na busca de imóveis: {e}")
+            return "Desculpe, ocorreu um erro técnico. Tente novamente em alguns instantes.", []
+
+
+    async def _retrieve_property_documents(self, user_query: str) -> list:
+        """Busca documentos no RAG local"""
+        retrieved = await rag.retrieve(user_query, top_k=8, filters={})
+        hits = retrieved or []
+        logger.info("RAG encontrou %d documentos para: %s", len(hits), user_query[:100])
+        return hits
+
+
+    def _process_retrieved_documents(self, hits: list) -> tuple[list, list]:
+        """
+        Processa documentos brutos e retorna dados normalizados + estruturados
+        """
+        normalized_hits = []
+        structured_properties = []
+        
+        for idx, doc in enumerate(hits):
+            # Extrair dados do documento
+            doc_data = self._extract_document_data(doc, idx)
+            normalized_hits.append(doc_data)
+            
+            # Se tem URL válida, adicionar à lista estruturada
+            if self._is_valid_property_url(doc_data["meta"].get("url")):
+                structured_property = self._create_structured_property(doc_data, idx)
+                structured_properties.append(structured_property)
+        
+        return normalized_hits, structured_properties
+
+
+    def _extract_document_data(self, doc, idx: int) -> dict:
+        """Extrai dados de um documento individual"""
+        meta = {}
+        text = ""
+        doc_id = None
+        
+        if isinstance(doc, dict):
+            meta = doc.get("meta") or doc.get("metadata") or doc.get("meta_data") or {}
+            text = (doc.get("text") or doc.get("content") or doc.get("snippet") or "").strip()
+            doc_id = doc.get("id") or doc.get("doc_id") or meta.get("id")
+        else:
+            try:
+                meta = getattr(doc, "meta", {}) or getattr(doc, "metadata", {}) or {}
+                text = (getattr(doc, "text", None) or getattr(doc, "content", None) or "")
+                doc_id = getattr(doc, "id", None)
+            except Exception:
+                text = str(doc)
+        
+        return {
+            "id": doc_id or f"doc_{idx}",
+            "text": (text or "")[:1200],
+            "meta": meta
+        }
+
+
+    def _is_valid_property_url(self, url: str) -> bool:
+        """Verifica se a URL é válida"""
+        return url and isinstance(url, str) and url.startswith("http")
+
+
+    def _create_structured_property(self, doc_data: dict, idx: int) -> dict:
+        """Cria estrutura de propriedade para CTA"""
+        meta = doc_data["meta"]
+        text = doc_data["text"]
+        
+        return {
+            "id": doc_data["id"],
+            "title": self._extract_title_from_text(text) or f"Imóvel em {meta.get('neighborhood', 'Curitiba')}",
+            "description": text[:200],
+            "url": meta.get("url"),
+            "main_image": meta.get("main_image") or meta.get("image"),
+            "neighborhood": meta.get("neighborhood") or meta.get("bairro"),
+            "price": meta.get("price") or meta.get("valor"),
+            "bedrooms": meta.get("bedrooms") or meta.get("quartos")
+        }
+
+
+    async def _generate_natural_response(self, user_query: str, normalized_hits: list) -> str:
+        """Gera resposta natural usando LLM"""
+        if not normalized_hits:
+            return self._handle_no_results()
+        
+        # Construir contexto para o LLM
+        context = self._build_llm_context(user_query, normalized_hits)
+        
+        # Chamar LLM
+        model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+        response = await asyncio.to_thread(rag.call_gpt, context, model)
+        
+        return response or self._handle_no_results()
+
+
+    def _build_llm_context(self, user_query: str, normalized_hits: list) -> str:
+        """Constrói contexto mais natural para o LLM"""
+        max_properties = self.bot_config.get("max_properties_per_response", 3)
+        
+        context_parts = [
+            "Você é Sofia, consultora imobiliária da Allega Imóveis em Curitiba.",
+            "Responda de forma natural e conversacional, como se estivesse falando pessoalmente com o cliente.",
+            f"Pergunta do cliente: {user_query}",
+            "",
+            "Imóveis disponíveis que podem interessar:"
+        ]
+        
+        # Adicionar informações dos imóveis de forma mais natural
+        for i, hit in enumerate(normalized_hits[:max_properties]):
+            meta = hit.get("meta", {})
+            property_info = self._format_property_info(hit, i + 1)
+            context_parts.append(property_info)
+        
+        context_parts.extend([
+            "",
+            "Instruções para sua resposta:",
+            "- Seja natural e conversacional, não robotizada",
+            "- Destaque os pontos mais relevantes para o que o cliente pediu",
+            "- Se houver links ou imagens, inclua-os naturalmente na conversa",
+            "- Ofereça ajuda adicional (visita, mais opções, contato direto)",
+            "- Se não encontrar nada adequado, seja honesta e ofereça alternativas",
+            "- Mantenha o tom amigável e profissional da Sofia"
+        ])
+        
+        return "\n".join(context_parts)
+
+
+    def _format_property_info(self, hit: dict, number: int) -> str:
+        """Formata informações de um imóvel para o contexto do LLM"""
+        meta = hit.get("meta", {})
+        text = hit.get("text", "")
+        
+        info_parts = [f"Opção {number}:"]
+        info_parts.append(f"Descrição: {text[:300]}")
+        
+        if meta.get("neighborhood") or meta.get("bairro"):
+            neighborhood = meta.get("neighborhood") or meta.get("bairro")
+            info_parts.append(f"Bairro: {neighborhood}")
+        
+        if meta.get("price") or meta.get("valor"):
+            price = meta.get("price") or meta.get("valor")
+            info_parts.append(f"Preço: {price}")
+        
+        if meta.get("url"):
+            info_parts.append(f"Link: {meta.get('url')}")
+        
+        if meta.get("main_image") or meta.get("image"):
+            image = meta.get("main_image") or meta.get("image")
+            info_parts.append(f"Imagem: {image}")
+        
+        return " | ".join(info_parts)
+
+
+    def _handle_no_results(self) -> str:
+        """Resposta quando não encontra imóveis"""
+        return (
+            "Não encontrei imóveis que atendam exatamente ao que você procura no momento. "
+            "Que tal me contar mais detalhes sobre suas preferências? "
+            "Posso buscar opções similares ou te ajudar a refinar a busca. "
+            "Também posso te passar o contato direto da nossa equipe para uma consulta personalizada."
+        )
 
     def _extract_title_from_text(self, text: str) -> str:
         """Extrai título do texto do imóvel"""
@@ -445,11 +543,64 @@ class IntelligentRealEstateBot:
         
         return ""
 
-    def _is_property_search(self, message: str) -> bool:
-        # heurística simples; pode ser substituída por NLU
-        keywords = ["procuro", "buscar", "apartamento", "quarto", "aluguel", "venda", "quartos", "vaga", "área", "bairro"]
-        text = message.lower()
-        return any(k in text for k in keywords)
+    async def _is_property_search(self, message: str) -> bool:
+        """
+        Detecta intenção de 'property_search' usando NLU via LLM.
+        - Tenta pedir ao LLM para devolver JSON {"intent": "...", "confidence": 0.x}
+        - Se falhar, usa heurística simples como fallback.
+        """
+        try:
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            prompt = (
+                "Analise se o usuário está PROCURANDO/BUSCANDO um imóvel para alugar ou comprar. "
+                "Retorne JSON: {\"intent\": \"property_search\" ou \"other\", \"confidence\": 0.0-1.0}\n\n"
+                f"Mensagem: \"{message}\"\n\n"
+                "Exemplos:\n"
+                "- 'Procuro apartamento 2 quartos' → property_search (0.95)\n"
+                "- 'Não quero mais apartamento' → other (0.9)\n"
+                "- 'Oi, tudo bem?' → other (0.95)"
+            )
+            
+            # call_gpt é síncrono; execute em thread
+            resp = await asyncio.to_thread(rag.call_gpt, prompt, model)
+            if not resp:
+                raise ValueError("NLU returned empty")
+
+            # tentar extrair JSON
+            start = resp.find("{")
+            end = resp.rfind("}") + 1
+            json_text = resp[start:end] if start != -1 and end != -1 else resp
+            data = json.loads(json_text)
+            intent = (data.get("intent") or "other").lower()
+            confidence = float(data.get("confidence") or 0.0)
+            
+            # Log para monitoramento
+            logger.info(f"NLU: '{message[:50]}...' → {intent} ({confidence:.2f})")
+            
+            # threshold configurável via env
+            threshold = float(os.getenv("NLU_PROPERTY_CONF_THRESHOLD", "0.6"))
+            return intent == "property_search" and confidence >= threshold
+            
+        except Exception as e:
+            logger.debug("NLU detect failed (%s) — falling back to keyword heuristic", e)
+            
+            # fallback: heurística melhorada
+            keywords = [
+                "procuro", "buscar", "apartamento", "casa", "quarto", "quartos", 
+                "aluguel", "venda", "vaga", "área", "bairro", "locação", 
+                "locar", "alugar", "comprar", "imóvel", "propriedade",
+                "preciso", "quero", "gostaria", "interesse"
+            ]
+            text = (message or "").lower()
+            found_keywords = [k for k in keywords if k in text]
+            
+            # Log do fallback também
+            if found_keywords:
+                logger.info(f"Fallback: '{message[:50]}...' → property_search (keywords: {found_keywords})")
+            else:
+                logger.info(f"Fallback: '{message[:50]}...' → other (no keywords)")
+                
+            return len(found_keywords) > 0
 
     async def _call_sofia_vision(self, prompt: str, image_base64: str, model_name: Optional[str] = None) -> str:
         """Envio de prompt + imagem (base64) para o GPT via call_gpt (executa em thread)."""
