@@ -12,7 +12,7 @@ from app.services.intelligent_bot import intelligent_bot
 from app.services.property_intelligence import property_intelligence
 from app.services.firebase_service import firebase_service
 from app.services.property_scraper import monitor_scraper
-from app.services.rag_pipeline import retrieve, build_prompt, call_gpt
+from app.services.rag_pipeline import rag
 import asyncio
 
 # Configurar logging
@@ -66,13 +66,6 @@ async def root():
 async def health():
     """Check system health status"""
     try:
-        # Verificar conectividade do Firebase
-        firebase_status = "unknown"
-        try:
-            await firebase_service.check_connection()
-            firebase_status = "connected"
-        except:
-            firebase_status = "disconnected"
         
         # Verificar dados de propriedades
         property_data_loaded = bool(property_intelligence.property_cache)
@@ -84,7 +77,6 @@ async def health():
             "verify_token_configured": bool(VERIFY_TOKEN),
             "access_token_configured": bool(ACCESS_TOKEN),
             "phone_number_configured": bool(PHONE_NUMBER_ID),
-            "firebase_status": firebase_status,
             "property_data_loaded": property_data_loaded,
             "features": {
                 "property_search": True,
@@ -195,7 +187,7 @@ async def webhook_handler(request: Request):
         body = await request.json()
         logger.info(f"Received webhook payload: {body}")
         stop_presence_event = asyncio.Event()
-        
+
         # Processar mensagens recebidas
         if "messages" in body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}):
             await process_whatsapp_message(body)
@@ -560,14 +552,14 @@ async def query_endpoint(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="Question is required")
 
     # 1) Recuperar documentos relevantes
-    retrieved = retrieve(question, top_k=5, filters=filters)
+    retrieved = rag.retrieve(question, top_k=5, filters=filters)
 
     # 2) Montar prompt para o OpenAI
-    prompt = build_prompt(question, retrieved)
+    prompt = rag.build_prompt(question, retrieved)
 
     # 3) Chamar OpenAI via função compat (bloqueante) em thread
     try:
-        response = await asyncio.to_thread(call_gpt, prompt)
+        response = await asyncio.to_thread(rag.call_gpt, prompt)
     except Exception as e:
         logger.error(f"Error calling OpenAI: {str(e)}")
         raise HTTPException(status_code=500, detail="Error generating response")
