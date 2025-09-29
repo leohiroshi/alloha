@@ -523,23 +523,31 @@ class IntelligentRealEstateBot:
 
             # 👈 NOVO: Se encontrou imóveis com URL, envia CTA do melhor resultado
             cta_sent = False
+            logger.debug("structured_properties count=%d content_preview=%s", len(structured_properties), repr(structured_properties)[:800])
             if structured_properties and getattr(self, "whatsapp_service", None):
                 try:
                     # Pega o MELHOR resultado (primeiro da lista já vem ordenado por relevância)
                     best_property = structured_properties[0]
+                    logger.debug("Best property selected for CTA: id=%s url=%s title=%s", best_property.get("id"), best_property.get("url"), best_property.get("title"))
+                     
                     
                     # Só envia CTA se tiver URL válida
                     if best_property.get("url") and best_property["url"].startswith("http"):
-                        logger.info(f"Enviando CTA para melhor imóvel: {best_property.get('title', 'N/A')}")
+                        has_method = getattr(self.whatsapp_service, "send_interactive_cta_url", None) is not None
+                        logger.debug("WhatsAppService has send_interactive_cta_url=%s", has_method)
+                        if not has_method:
+                            logger.warning("WhatsAppService missing send_interactive_cta_url; skipping CTA and will send text fallback.")
+                        else:
+                            logger.info(f"Enviando CTA para melhor imóvel: {best_property.get('title', 'N/A')}")
                         
-                        cta_success = await self.whatsapp_service.send_interactive_cta_url(
-                            to=user_phone,
-                            image_url=best_property.get("main_image"),
-                            body_text=f"{best_property.get('title', 'Imóvel encontrado')}\n\n{best_property.get('description', '')}...",
-                            button_text="Ver detalhes",
-                            url=best_property["url"],
-                            footer_text="Agende sua visita!"
-                        )
+                            cta_success = await self.whatsapp_service.send_interactive_cta_url(
+                                to=user_phone,
+                                image_url=best_property.get("main_image"),
+                                body_text=f"{best_property.get('title', 'Imóvel encontrado')}\n\n{best_property.get('description', '')}...",
+                                button_text="Ver detalhes",
+                                url=best_property["url"],
+                                footer_text="Agende sua visita!"
+                            )
                         
                         if cta_success:
                             cta_sent = True
