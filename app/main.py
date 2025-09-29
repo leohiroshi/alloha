@@ -10,7 +10,6 @@ from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
 from app.services.property_intelligence import property_intelligence
-from app.services.firebase_service import firebase_service
 from app.services.property_scraper import monitor_scraper
 from app.services.rag_pipeline import rag
 import asyncio

@@ -15,7 +15,7 @@ import json
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, firestore
-from app.services.rag_pipeline import call_gpt, retrieve, build_prompt
+from app.services.rag_pipeline import rag
 from app.services.property_intelligence import property_intelligence
 
 from app.services.whatsapp_service import WhatsAppService  # assume exists in workspace
@@ -165,7 +165,7 @@ class IntelligentRealEstateBot:
             logger.info(f"Prompt com histórico para {user_phone}:\n{prompt_with_history[:1000]}")
 
             model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
-            response_text = await asyncio.to_thread(call_gpt, prompt_with_history, model)
+            response_text = await asyncio.to_thread(rag.call_gpt, prompt_with_history, model)
 
             if not response_text:
                 response_text = "Desculpe, não consegui gerar uma resposta no momento."
@@ -261,7 +261,7 @@ class IntelligentRealEstateBot:
             prompt += "Sofia:"
 
             model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
-            response_text = await asyncio.to_thread(call_gpt, prompt, model)
+            response_text = await asyncio.to_thread(rag.call_gpt, prompt, model)
             return response_text.strip() if response_text else (
                 "😅 Tive dificuldade técnica para responder no momento. Por favor, tente novamente em instantes."
             )
@@ -294,7 +294,7 @@ class IntelligentRealEstateBot:
                 + f"\n\nMESSAGE:\n{message}\n\nReturn JSON example:\n{json.dumps(example, ensure_ascii=False)}\n\nJSON:"
             )
             model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
-            resp = await asyncio.to_thread(call_gpt, prompt, model)
+            resp = await asyncio.to_thread(rag.call_gpt, prompt, model)
             if not resp:
                 return {}
             # tentar extrair JSON bruto do texto
@@ -346,10 +346,10 @@ class IntelligentRealEstateBot:
         """
         try:
             # 1) recuperar localmente
-            retrieved = retrieve(user_query, top_k=5, filters={})
-            prompt = build_prompt(user_query, retrieved)
+            retrieved = rag.retrieve(user_query, top_k=5, filters={})
+            prompt = rag.build_prompt(user_query, retrieved)
             model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
-            answer = await asyncio.to_thread(call_gpt, prompt, model)
+            answer = await asyncio.to_thread(rag.call_gpt, prompt, model)
 
             # construir candidates para exibição
             candidates = []
@@ -418,7 +418,7 @@ class IntelligentRealEstateBot:
             model = model_name or os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             full_prompt = prompt + "\n\n---BEGIN_IMAGE_BASE64---\n" + image_base64 + "\n---END_IMAGE_BASE64---\n\n"
             full_prompt += "Resuma em até 300 caracteres e destaque campos relevantes."
-            resp = await asyncio.to_thread(call_gpt, full_prompt, model)
+            resp = await asyncio.to_thread(rag.call_gpt, full_prompt, model)
             return resp or "📸 Não consegui analisar a imagem agora."
         except Exception as e:
             logger.exception(f"Erro visão Sofia (OpenAI): {e}")

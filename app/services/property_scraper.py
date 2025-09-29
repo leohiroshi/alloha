@@ -29,7 +29,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 # internal services
 from app.services.firebase_service import FirebaseService
-from app.services.rag_pipeline import call_gpt
+from app.services.rag_pipeline import rag
 from app.services.intelligent_bot import intelligent_bot
 
 logging.basicConfig(level=logging.INFO)
@@ -232,7 +232,7 @@ class AllegaPropertyScraper:
         prompt = f"{system_prompt}\n\n{user_prompt}\n\nSofia:"
 
         try:
-            resp = await asyncio.to_thread(call_gpt, prompt, self.openai_model)
+            resp = await asyncio.to_thread(rag.call_gpt, prompt, self.openai_model)
             if resp:
                 property_data['ai_analysis'] = resp.strip()[:250]
                 property_data['ai_enhanced'] = True
@@ -277,7 +277,7 @@ class AllegaPropertyScraper:
         user_prompt = json.dumps(summary, ensure_ascii=False)[:2000]
         prompt = f"{system_prompt}\n\n{user_prompt}\n\nSofia:"
         try:
-            resp = await asyncio.to_thread(call_gpt, prompt, self.openai_model)
+            resp = await asyncio.to_thread(rag.call_gpt, prompt, self.openai_model)
             if resp:
                 return {
                     'ai_insights': resp.strip(),

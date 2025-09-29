@@ -6,7 +6,7 @@ import base64
 from typing import Optional, Dict, Any
 from datetime import datetime
 import asyncio
-from app.services.rag_pipeline import call_gpt, retrieve, build_prompt
+from app.services.rag_pipeline import rag
 
 logger = logging.getLogger(__name__)
 
@@ -38,19 +38,19 @@ class AIService:
         # detecção simples de busca de imóvel
         if any(k in message.lower() for k in ["apartamento", "casa", "procuro", "quartos", "aluguel", "venda"]):
             # Retrieval + RAG
-            retrieved = retrieve(message, top_k=5, filters={})
-            prompt = build_prompt(message, retrieved)
+            retrieved = rag.retrieve(message, top_k=5, filters={})
+            prompt = rag.build_prompt(message, retrieved)
             model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
-            return await asyncio.to_thread(call_gpt, prompt, model)
+            return await asyncio.to_thread(rag.call_gpt, prompt, model)
 
         prompt = f"Você é Sofia, assistente da Allega Imóveis.\nUsuário: {message}\nResponda de forma concisa."
         model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
-        return await asyncio.to_thread(call_gpt, prompt, model)
+        return await asyncio.to_thread(rag.call_gpt, prompt, model)
 
     async def generate_text(self, prompt: str) -> str:
         # wrapper async para chamar o GPT (bloqueante) em thread
         model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
-        return await asyncio.to_thread(call_gpt, prompt, model)
+        return await asyncio.to_thread(rag.call_gpt, prompt, model)
 
     @property
     def property_intelligence(self):
@@ -319,7 +319,7 @@ Máximo 250 caracteres."""
 
             model_name = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             # call_gpt é bloqueante — executar em thread
-            llm_response = await asyncio.to_thread(call_gpt, prompt, model_name)
+            llm_response = await asyncio.to_thread(rag.call_gpt, prompt, model_name)
 
             if llm_response:
                 content = llm_response.strip()

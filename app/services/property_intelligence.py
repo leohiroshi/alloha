@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from .firebase_service import FirebaseService
-from app.services.rag_pipeline import call_gpt, build_prompt, retrieve
+from app.services.rag_pipeline import rag
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -391,7 +391,7 @@ class PropertyIntelligenceService:
             prompt = f"{system_prompt}\n\n{user_prompt}\nImóveis:\n{props_preview}\n\nSofia:"
 
             # call_gpt é bloqueante; execute em thread
-            response_text = await asyncio.to_thread(call_gpt, prompt, self.openai_model)
+            response_text = await asyncio.to_thread(rag.call_gpt, prompt, self.openai_model)
             return response_text.strip()[:250] if response_text else None
         except Exception as e:
             logger.error(f"Erro ao chamar GPT: {str(e)}")
@@ -408,7 +408,7 @@ class PropertyIntelligenceService:
             user_prompt = f"Preferências do usuário: {json.dumps(user_preferences, ensure_ascii=False)}"
             prompt = f"{system_prompt}\n\n{user_prompt}\nSofia:"
 
-            content = await asyncio.to_thread(call_gpt, prompt, self.openai_model)
+            content = await asyncio.to_thread(rag.call_gpt, prompt, self.openai_model)
             if content:
                 return f"💡 *Recomendações da Sofia:*\n{content.strip()}\n\n{self._add_contact_info()}"
             else:

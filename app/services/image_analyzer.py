@@ -14,7 +14,7 @@ import socket
 import random
 import base64
 from dotenv import load_dotenv
-from app.services.rag_pipeline import call_gpt
+from app.services.rag_pipeline import rag
 
 load_dotenv()
 
@@ -49,7 +49,7 @@ class PropertyImageAnalyzer:
             )
 
             # call_gpt é bloqueante; executar em thread
-            llm_content = await asyncio.to_thread(call_gpt, enhanced_prompt, self.openai_model)
+            llm_content = await asyncio.to_thread(rag.call_gpt, enhanced_prompt, self.openai_model)
             if llm_content:
                 extracted_query = self._extract_query_from_llm(llm_content)
                 return {
