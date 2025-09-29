@@ -346,83 +346,75 @@ class IntelligentRealEstateBot:
 
     async def process_property_search(self, user_query: str) -> str:
         """
-        Busca imóveis usando RAG local (retrieve + build_prompt + call_gpt).
-        Fallback: se retrieve/local falhar, tenta chamar RAG_ENDPOINT HTTP.
+        Busca imóveis usando RAG local (retrieve + prompt grounding + call_gpt).
+        Garante que somente strings normalizadas são incluídas no prompt (evita repr() de objetos).
         """
         try:
-            # 1) recuperar localmente (await!) -- buscar mais candidates para melhor grounding
+            # 1) recuperar localmente (await!)
             retrieved = await rag.retrieve(user_query, top_k=8, filters={})
             hits = retrieved or []
             logger.info("RAG retrieved %d documents for query: %s", len(hits), user_query)
-            # DEBUG: log resumido de cada hit (id / first 200 chars / keys metadata)
-            for i, h in enumerate(hits):
-                try:
-                    if isinstance(h, dict):
-                        txt = (h.get("text") or h.get("content") or "")[:200]
-                        meta = h.get("meta") or h.get("metadata") or {}
-                        hid = h.get("id") or meta.get("id") or f"unknown_{i}"
-                    else:
-                        txt = (getattr(h, "text", None) or getattr(h, "content", None) or str(h))[:200]
-                        meta = getattr(h, "meta", {}) or {}
-                        hid = getattr(h, "id", None) or f"unknown_{i}"
-                    logger.debug("RAG hit %d: id=%s snippet=%s meta_keys=%s", i, hid, txt, list(meta.keys()))
-                except Exception:
-                    logger.debug("RAG hit %d: could not serialize", i)
 
-            # 2) build_prompt (if returns small/empty, build explicit prompt including doc snippets)
-            prompt = rag.build_prompt(user_query, retrieved) if hasattr(rag, "build_prompt") else ""
-            if not prompt or len(prompt) < 200:
-                # montar prompt explícito com top 3 doc summaries para garantir grounding
-                parts = [
-                    "Você é Sofia, assistente virtual da Allega Imóveis. Use os documentos abaixo para responder objetivamente.",
-                    f"Consulta do usuário: {user_query}",
-                    "Documentos relevantes:"
-                ]
-                for i, h in enumerate(hits[: self.bot_config.get("max_properties_per_response", 3)]):
-                    meta = {}
-                    text = ""
-                    if isinstance(h, dict):
-                        meta = h.get("meta") or h.get("metadata") or {}
-                        text = h.get("text") or h.get("content") or ""
-                        hid = h.get("id") or meta.get("id") or f"unknown_{i}"
-                    else:
-                        meta = getattr(h, "meta", {}) or {}
-                        text = getattr(h, "text", None) or getattr(h, "content", None) or str(h)
-                        hid = getattr(h, "id", None) or f"unknown_{i}"
-                    parts.append(
-                        f"DOCUMENT {i+1} - id:{hid} | snippet: {text[:300]} | neighborhood: {meta.get('neighborhood') or meta.get('bairro') or 'n/a'} | price: {meta.get('price') or meta.get('valor') or 'n/a'} | url:{meta.get('url') or ''}"
-                    )
-                parts.append(
-                    "Instruções: Resuma até 3 opções com título, bairro, preço e link (quando houver). Seja objetivo e proponha próximos passos."
-                )
-                prompt = "\n\n".join(parts)
-
-            logger.debug("Final RAG prompt (truncated 3000): %s", (prompt or "")[:3000])
-            model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
-            answer = await asyncio.to_thread(rag.call_gpt, prompt, model)
-
-            # construir candidates para exibição (suporta várias shapes)
-            candidates = []
-            for r in (retrieved or []):
-                # normalizar metadados / texto independente do provider
+            # 2) Normalizar retrieved para texto + metadados (garante que build_prompt receba conteúdo útil)
+            normalized_hits = []
+            for idx, r in enumerate(hits):
                 meta = {}
+                text = ""
+                rid = None
+                # dicionário retornado pelo indexer
                 if isinstance(r, dict):
                     meta = r.get("meta") or r.get("metadata") or r.get("meta_data") or {}
-                    text = r.get("text") or r.get("content") or r.get("snippet") or ""
-                    rid = r.get("id") or r.get("doc_id") or None
+                    # garantir pegar campos de texto conhecidos
+                    text = (r.get("text") or r.get("content") or r.get("snippet") or "").strip()
+                    rid = r.get("id") or r.get("doc_id") or meta.get("id")
                 else:
-                    # fallback stringify
-                    meta = {}
-                    text = str(r)
-                    rid = None
+                    # objetos com atributos (fallback)
+                    try:
+                        meta = getattr(r, "meta", {}) or getattr(r, "metadata", {}) or {}
+                        text = (getattr(r, "text", None) or getattr(r, "content", None) or "")
+                        rid = getattr(r, "id", None)
+                    except Exception:
+                        text = str(r)
 
+                normalized_hits.append({
+                    "id": rid or f"unknown_{idx}",
+                    "text": (text or "")[:1200],
+                    "meta": meta
+                })
+
+            # 3) construir prompt explícito incluindo top results para grounding (evita usar raw retrieved)
+            top_n = self.bot_config.get("max_properties_per_response", 3)
+            prompt_parts = [
+                "Você é Sofia, assistente virtual da Allega Imóveis em Curitiba. Use os documentos abaixo para responder objetivamente.",
+                f"Consulta do usuário: {user_query}",
+                "Documentos relevantes (use esses dados para listar imóveis e incluir URLs/imagens quando existirem):"
+            ]
+            for i, h in enumerate(normalized_hits[:top_n]):
+                m = h.get("meta", {}) or {}
+                prompt_parts.append(
+                    f"DOCUMENT {i+1} - id:{h.get('id')} | snippet: {h.get('text')[:300]} | neighborhood: {m.get('neighborhood') or m.get('bairro') or 'n/a'} | price: {m.get('price') or m.get('valor') or 'n/a'} | url: {m.get('url') or ''} | image: {m.get('main_image') or m.get('image') or ''}"
+                )
+            prompt_parts.append(
+                "Instruções: 1) Resuma e proponha até 3 opções mostrando título/snippet, bairro, preço (se disponível) e link quando houver. 2) Seja objetivo, cordial e proponha próximos passos (visita/contato). 3) Se não houver resultados relevantes, diga claramente que não encontrou."
+            )
+            prompt = "\n\n".join(prompt_parts)
+            logger.debug("RAG prompt (truncated): %s", (prompt or "")[:3000])
+
+            # 4) chamar LLM (síncrono via thread) passando apenas a string do prompt
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            answer = await asyncio.to_thread(rag.call_gpt, prompt, model)
+
+            # 5) montar lista de candidates para resposta e CTA (use normalized_hits)
+            candidates = []
+            for h in normalized_hits:
+                m = h.get("meta") or {}
                 candidates.append({
-                    "id": rid,
-                    "preview": (text or "")[:120],
-                    "url": meta.get("url"),
-                    "image": meta.get("main_image") or meta.get("image"),
-                    "neighborhood": meta.get("neighborhood") or meta.get("bairro"),
-                    "price": meta.get("price") or meta.get("valor")
+                    "id": h.get("id"),
+                    "preview": (h.get("text") or "")[:140],
+                    "url": m.get("url"),
+                    "image": m.get("main_image") or m.get("image"),
+                    "neighborhood": m.get("neighborhood") or m.get("bairro"),
+                    "price": m.get("price") or m.get("valor")
                 })
 
             if not answer:
@@ -430,7 +422,7 @@ class IntelligentRealEstateBot:
 
             if candidates:
                 answer += "\n\nImóveis encontrados:\n"
-                for c in candidates[: self.bot_config.get("max_properties_per_response", 3)]:
+                for c in candidates[:top_n]:
                     answer += f"🏠 {c.get('preview','Imóvel')}\n"
                     if c.get("url"):
                         answer += f"🔗 {c['url']}\n"
@@ -438,9 +430,9 @@ class IntelligentRealEstateBot:
                         answer += f"🖼️ {c['image']}\n"
                     answer += "\n"
             return answer
+
         except Exception as e:
             logger.exception(f"Erro RAG local: {e}")
-
             # fallback para RAG HTTP endpoint se disponível
             try:
                 payload = {"question": user_query, "filters": {}}
