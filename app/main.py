@@ -54,7 +54,7 @@ async def root():
             "AI-powered conversations",
             "Firebase integration",
             "Real estate data scraping",
-            "Image analysis with LLaMA 3.2 Vision",
+            "Image analysis with GPT-5 mini",
             "Property availability verification"
         ],
         "endpoints": ["/webhook", "/health", "/docs", "/update-properties"],

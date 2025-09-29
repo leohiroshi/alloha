@@ -60,6 +60,11 @@ class RetrievalResult:
 
 class RAGPipeline:
     def __init__(self):
+        self.system_prompt = """Você é Sofia, assistente virtual da Allega Imóveis em Curitiba/PR. 
+                            Persona: amigável, prestativa, especialista em mercado imobiliário de Curitiba. 
+                            Estilo: concisa (3-4 linhas), usa emojis contextuais, oferece próximos passos (visita, contato, WhatsApp). 
+                            Instruções: apresente-se na primeira interação, qualifique leads (orçamento, preferências, prazo), seja empática com objeções de preço e sugira alternativas se necessário."""
+        
         self.logger = self._setup_logging()
         self.embed_model = SentenceTransformer(EMBED_MODEL_NAME)
         self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
@@ -416,30 +421,9 @@ class RAGPipeline:
 
     def build_prompt(self, question: str, retrieved: List[RetrievalResult]) -> str:
         """Build RAG prompt with token limit"""
-        system_prompt = """Você é Sofia, assistente virtual especializada em imóveis da Allega Imóveis em Curitiba/PR. 
-                            CARACTERÍSTICAS:
-                            - Amigável, prestativa e proativa
-                            - Usa emojis contextuais naturalmente 
-                            - Respostas concisas (máximo 3-4 linhas)
-                            - Especialista em mercado imobiliário de Curitiba
-                            - Sempre oferece próximos passos (visita, contato, informações)
-                            INFORMAÇÕES DA EMPRESA:
-                            - Nome: Allega Imóveis
-                            - Telefone: (41) 3285-1383
-                            - WhatsApp Venda: (41) 99214-6670
-                            - WhatsApp Locação: (41) 99223-0874
-                            - Horário: Seg-Sex 08h-18h | Sáb 09h-13h
-                            - CRECI: 6684 J
-                            INSTRUÇÕES:
-                            1. Sempre se apresente como Sofia na primeira interação
-                            2. Qualifique leads: orçamento, preferências, prazo
-                            3. Ofereça agendamento quando mostrar interesse
-                            4. Use conhecimento local de Curitiba
-                            5. Seja empática com objeções de preço
-                            6. Sugira alternativas quando imóvel indisponível"""
 
         context_blocks = []
-        total_tokens = len(self.tokenizer.encode(system_prompt + question))
+        total_tokens = len(self.tokenizer.encode(self.system_prompt + question))
         
         for result in retrieved:
             meta = result.metadata
@@ -461,10 +445,12 @@ class RAGPipeline:
         
         context = "\n\n---\n\n".join(context_blocks) if context_blocks else "Nenhuma informação encontrada."
         
-        return f"""CONTEXTO:
-                {context}
+        return f"""{self.system_prompt}
+        
+        CONTEXTO:
+        {context}
 
-                PERGUNTA: {question}"""
+        PERGUNTA: {question}"""
 
     @retry(stop=stop_after_attempt(MAX_RETRIES), wait=wait_exponential(multiplier=1, min=4, max=10))
     def call_gpt(self, prompt: str, model_name: Optional[str] = None, temperature: float = 0.1) -> str:
