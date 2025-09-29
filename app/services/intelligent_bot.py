@@ -112,12 +112,18 @@ class IntelligentRealEstateBot:
             # 4) Recupera histórico rápido (menor limite para agilizar)
             history = await self.get_conversation_history(user_phone, limit=6)
 
-            # 5) Dispara geração/atualização em background (passa None como stop_event)
-            asyncio.create_task(self._generate_and_send_response(
-                message, user_phone, history
-            ))
+            # 5) Se for busca por imóvel, dispare tarefa específica de busca+envio.
+            #    Assim garantimos que process_property_search seja chamado.
+            if self._is_property_search(message):
+                logger.info("Mensagem identificada como busca de imóvel — iniciando fluxo de property_search em background.")
+                asyncio.create_task(self._process_property_search_and_send(message, user_phone, history))
+            else:
+                # Dispara geração/atualização em background (fluxo genérico)
+                asyncio.create_task(self._generate_and_send_response(
+                    message, user_phone, history
+                ))
 
-            # 6) Retorna rápido para caller — sem placeholder criado no Firestore
+             # 6) Retorna rápido para caller — sem placeholder criado no Firestore
             return ""
         except Exception as e:
             logger.exception(f"Erro ao processar mensagem (inicial): {e}")
@@ -162,7 +168,6 @@ class IntelligentRealEstateBot:
             normalized_history = _normalize_history(history)
             short_history = normalized_history + [{"role": "user", "content": message}]
             prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])
-            logger.info(f"Prompt com histórico para {user_phone}:\n{prompt_with_history[:1000]}")
 
             model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             response_text = await asyncio.to_thread(rag.call_gpt, prompt_with_history, model)
@@ -345,23 +350,36 @@ class IntelligentRealEstateBot:
         Fallback: se retrieve/local falhar, tenta chamar RAG_ENDPOINT HTTP.
         """
         try:
-            # 1) recuperar localmente
-            retrieved = rag.retrieve(user_query, top_k=5, filters={})
+            # 1) recuperar localmente (await!)
+            retrieved = await rag.retrieve(user_query, top_k=5, filters={})
+            logger.info(f"RAG retrieved {len(retrieved) if retrieved is not None else 0} documents for query: {user_query}")
+
             prompt = rag.build_prompt(user_query, retrieved)
             model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             answer = await asyncio.to_thread(rag.call_gpt, prompt, model)
 
-            # construir candidates para exibição
+            # construir candidates para exibição (suporta várias shapes)
             candidates = []
-            for r in retrieved:
-                m = r.get("meta", {})
+            for r in (retrieved or []):
+                # normalizar metadados / texto independente do provider
+                meta = {}
+                if isinstance(r, dict):
+                    meta = r.get("meta") or r.get("metadata") or r.get("meta_data") or {}
+                    text = r.get("text") or r.get("content") or r.get("snippet") or ""
+                    rid = r.get("id") or r.get("doc_id") or None
+                else:
+                    # fallback stringify
+                    meta = {}
+                    text = str(r)
+                    rid = None
+
                 candidates.append({
-                    "id": r.get("id"),
-                    "preview": (r.get("text","")[:120]),
-                    "url": m.get("url"),
-                    "image": m.get("main_image") or m.get("image"),
-                    "neighborhood": m.get("neighborhood"),
-                    "price": m.get("price")
+                    "id": rid,
+                    "preview": (text or "")[:120],
+                    "url": meta.get("url"),
+                    "image": meta.get("main_image") or meta.get("image"),
+                    "neighborhood": meta.get("neighborhood") or meta.get("bairro"),
+                    "price": meta.get("price") or meta.get("valor")
                 })
 
             if not answer:
@@ -470,6 +488,37 @@ class IntelligentRealEstateBot:
             logger.info(f"Embedding meta salvo: {vector_id}")
         except Exception as e:
             logger.debug(f"Erro salvar embedding meta: {e}")
+
+    async def _process_property_search_and_send(self, user_query: str, user_phone: str, history: List[Dict[str, str]]):
+        """Wrapper: executa process_property_search e envia resultado+persiste via WhatsApp."""
+        try:
+            logger.info("Iniciando fluxo de property_search para %s: %s", user_phone, user_query[:120])
+            answer = await self.process_property_search(user_query)
+            if not answer:
+                answer = "Desculpe, não encontrei imóveis com essas características no momento."
+            # Persistir mensagem enviada
+            try:
+                await asyncio.to_thread(db.collection("messages").add, {
+                    "user_phone": user_phone,
+                    "message": answer,
+                    "direction": "sent",
+                    "timestamp": datetime.utcnow(),
+                    "metadata": {"ai": True, "flow": "property_search"}
+                })
+            except Exception:
+                logger.exception("Falha ao persistir mensagem de property_search no Firestore.")
+            # Enviar via WhatsApp se disponível
+            if getattr(self, "whatsapp_service", None):
+                try:
+                    ok = await self.whatsapp_service.send_message(user_phone, answer)
+                    if not ok:
+                        logger.warning("Envio de property_search via WhatsAppService não confirmou sucesso; verifique logs.")
+                except Exception:
+                    logger.exception("Erro ao enviar property_search via WhatsAppService.")
+            else:
+                logger.debug("WhatsAppService não configurado; property_search apenas persistido no Firestore.")
+        except Exception as e:
+            logger.exception("Erro no fluxo property_search: %s", e)
 
 
 # Instância global do bot

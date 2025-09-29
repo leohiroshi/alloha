@@ -179,6 +179,62 @@ class WhatsAppService:
             logger.exception("Error marking message as read: %s", e)
             return False
 
+    async def send_interactive_cta_url(
+        self,
+        to: str,
+        image_url: Optional[str],
+        body_text: str,
+        button_text: str,
+        url: str,
+        footer_text: Optional[str] = None
+    ) -> bool:
+        """
+        Envia uma Interactive Call-to-Action URL Button Message (tipo cta_url).
+        Exemplo de uso: await whatsapp_service.send_interactive_cta_url(from_number, image_url, body, "Ver imóvel", link)
+        """
+        try:
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": to,
+                "type": "interactive",
+                "interactive": {
+                    "type": "cta_url",
+                    "body": {"text": body_text},
+                    "action": {
+                        "name": "cta_url",
+                        "parameters": {
+                            "display_text": button_text,
+                            "url": url
+                        }
+                    }
+                }
+            }
+
+            # optional header image
+            if image_url:
+                payload["interactive"]["header"] = {
+                    "type": "image",
+                    "image": {"link": image_url}
+                }
+
+            # optional footer
+            if footer_text:
+                payload["interactive"]["footer"] = {"text": footer_text}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.messages_url, headers=self.headers, json=payload) as response:
+                    resp_text = await response.text()
+                    if 200 <= response.status < 300:
+                        logger.info("Interactive CTA sent successfully to %s (status=%s)", to, response.status)
+                        return True
+                    logger.error("Failed to send interactive CTA: %s - %s", response.status, resp_text[:1000])
+                    return False
+
+        except Exception as e:
+            logger.exception("Error sending interactive CTA: %s", e)
+            return False
+
     def is_configured(self) -> bool:
         """Verificar se o serviço está configurado"""
         return bool(self.access_token and self.phone_number_id)
