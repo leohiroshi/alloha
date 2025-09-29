@@ -532,7 +532,14 @@ class IntelligentRealEstateBot:
                     if best_property.get("url") and best_property["url"].startswith("http"):
                         logger.info(f"Enviando CTA para melhor imóvel: {best_property.get('title', 'N/A')}")
                         
-                        cta_success = await self.whatsapp_service.send_property_cta(user_phone, best_property)
+                        cta_success = await self.whatsapp_service.send_interactive_cta_url(
+                            to=user_phone,
+                            image_url=best_property.get("main_image"),
+                            body_text=f"🏡 {best_property.get('title', 'Imóvel encontrado')}\n\n{best_property.get('description', '')[:150]}...",
+                            button_text="🔎 Ver detalhes",
+                            url=best_property["url"],
+                            footer_text="Agende sua visita! 📞 (41) 99214-6670"
+                        )
                         
                         if cta_success:
                             cta_sent = True
