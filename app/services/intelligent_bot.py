@@ -344,10 +344,10 @@ class IntelligentRealEstateBot:
         except Exception as e:
             logger.debug(f"Erro salvar property_search: {e}")
 
-    async def process_property_search(self, user_query: str) -> str:
+    async def process_property_search(self, user_query: str) -> tuple[str, list]:
         """
-        Busca imóveis usando RAG local (retrieve + prompt grounding + call_gpt).
-        Garante que somente strings normalizadas são incluídas no prompt (evita repr() de objetos).
+        Busca imóveis usando RAG local.
+        Retorna: (resposta_texto, lista_de_imoveis_estruturados)
         """
         try:
             # 1) recuperar localmente (await!)
@@ -355,20 +355,20 @@ class IntelligentRealEstateBot:
             hits = retrieved or []
             logger.info("RAG retrieved %d documents for query: %s", len(hits), user_query)
 
-            # 2) Normalizar retrieved para texto + metadados (garante que build_prompt receba conteúdo útil)
+            # 2) Normalizar retrieved para texto + metadados
             normalized_hits = []
+            structured_properties = []  # 👈 NOVO: lista estruturada para CTA
+            
             for idx, r in enumerate(hits):
                 meta = {}
                 text = ""
                 rid = None
-                # dicionário retornado pelo indexer
+                
                 if isinstance(r, dict):
                     meta = r.get("meta") or r.get("metadata") or r.get("meta_data") or {}
-                    # garantir pegar campos de texto conhecidos
                     text = (r.get("text") or r.get("content") or r.get("snippet") or "").strip()
                     rid = r.get("id") or r.get("doc_id") or meta.get("id")
                 else:
-                    # objetos com atributos (fallback)
                     try:
                         meta = getattr(r, "meta", {}) or getattr(r, "metadata", {}) or {}
                         text = (getattr(r, "text", None) or getattr(r, "content", None) or "")
@@ -381,83 +381,69 @@ class IntelligentRealEstateBot:
                     "text": (text or "")[:1200],
                     "meta": meta
                 })
+                
+                # 👈 NOVO: Estruturar dados para CTA (se tiver URL válida)
+                if meta.get("url") and meta.get("url").startswith("http"):
+                    structured_properties.append({
+                        "id": rid or f"unknown_{idx}",
+                        "title": self._extract_title_from_text(text) or f"Imóvel em {meta.get('neighborhood', 'Curitiba')}",
+                        "description": text[:200],
+                        "url": meta.get("url"),
+                        "main_image": meta.get("main_image") or meta.get("image"),
+                        "neighborhood": meta.get("neighborhood") or meta.get("bairro"),
+                        "price": meta.get("price") or meta.get("valor"),
+                        "bedrooms": meta.get("bedrooms") or meta.get("quartos")
+                    })
 
-            # 3) construir prompt explícito incluindo top results para grounding (evita usar raw retrieved)
+            # 3) construir prompt (mesmo código anterior)
             top_n = self.bot_config.get("max_properties_per_response", 3)
             prompt_parts = [
                 "Você é Sofia, assistente virtual da Allega Imóveis em Curitiba. Use os documentos abaixo para responder objetivamente.",
                 f"Consulta do usuário: {user_query}",
                 "Documentos relevantes (use esses dados para listar imóveis e incluir URLs/imagens quando existirem):"
             ]
+            
             for i, h in enumerate(normalized_hits[:top_n]):
                 m = h.get("meta", {}) or {}
                 prompt_parts.append(
                     f"DOCUMENT {i+1} - id:{h.get('id')} | snippet: {h.get('text')[:300]} | neighborhood: {m.get('neighborhood') or m.get('bairro') or 'n/a'} | price: {m.get('price') or m.get('valor') or 'n/a'} | url: {m.get('url') or ''} | image: {m.get('main_image') or m.get('image') or ''}"
                 )
+                
             prompt_parts.append(
                 "Instruções: 1) Resuma e proponha até 3 opções mostrando título/snippet, bairro, preço (se disponível) e link quando houver. 2) Seja objetivo, cordial e proponha próximos passos (visita/contato). 3) Se não houver resultados relevantes, diga claramente que não encontrou."
             )
             prompt = "\n\n".join(prompt_parts)
-            logger.debug("RAG prompt (truncated): %s", (prompt or "")[:3000])
 
-            # 4) chamar LLM (síncrono via thread) passando apenas a string do prompt
+            # 4) chamar LLM
             model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             answer = await asyncio.to_thread(rag.call_gpt, prompt, model)
-
-            # 5) montar lista de candidates para resposta e CTA (use normalized_hits)
-            candidates = []
-            for h in normalized_hits:
-                m = h.get("meta") or {}
-                candidates.append({
-                    "id": h.get("id"),
-                    "preview": (h.get("text") or "")[:140],
-                    "url": m.get("url"),
-                    "image": m.get("main_image") or m.get("image"),
-                    "neighborhood": m.get("neighborhood") or m.get("bairro"),
-                    "price": m.get("price") or m.get("valor")
-                })
 
             if not answer:
                 answer = "Desculpe, não encontrei imóveis com essas características."
 
-            if candidates:
-                answer += "\n\nImóveis encontrados:\n"
-                for c in candidates[:top_n]:
-                    answer += f"🏠 {c.get('preview','Imóvel')}\n"
-                    if c.get("url"):
-                        answer += f"🔗 {c['url']}\n"
-                    if c.get("image"):
-                        answer += f"🖼️ {c['image']}\n"
-                    answer += "\n"
-            return answer
+            return answer, structured_properties  # 👈 NOVO: retorna tupla
 
         except Exception as e:
             logger.exception(f"Erro RAG local: {e}")
-            # fallback para RAG HTTP endpoint se disponível
-            try:
-                payload = {"question": user_query, "filters": {}}
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(RAG_ENDPOINT, json=payload, timeout=30) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            answer = data.get("answer", "Desculpe, não encontrei imóveis com essas características.")
-                            candidates = data.get("candidates", [])
-                            if candidates:
-                                answer += "\n\nImóveis encontrados:\n"
-                                for c in candidates[: self.bot_config.get("max_properties_per_response", 3)]:
-                                    answer += f"🏠 {c.get('preview','Imóvel')[:120]}\n"
-                                    if c.get("url"):
-                                        answer += f"🔗 {c['url']}\n"
-                                    if c.get("image"):
-                                        answer += f"🖼️ {c['image']}\n"
-                                    answer += "\n"
-                            return answer
-                        else:
-                            logger.error(f"RAG endpoint returned {resp.status}")
-            except Exception as e2:
-                logger.exception(f"Fallback RAG HTTP failed: {e2}")
+            return "Erro técnico buscando imóveis. Tente novamente mais tarde.", []
 
-            return "Erro técnico buscando imóveis. Tente novamente mais tarde."
+    def _extract_title_from_text(self, text: str) -> str:
+        """Extrai título do texto do imóvel"""
+        if not text:
+            return ""
+        
+        # Procura por "Título:" no início
+        lines = text.split('\n')
+        for line in lines:
+            if line.strip().startswith("Título:"):
+                return line.replace("Título:", "").strip()
+        
+        # Fallback: primeira linha não vazia
+        for line in lines:
+            if line.strip():
+                return line.strip()[:50]
+        
+        return ""
 
     def _is_property_search(self, message: str) -> bool:
         # heurística simples; pode ser substituída por NLU
@@ -525,12 +511,41 @@ class IntelligentRealEstateBot:
             logger.debug(f"Erro salvar embedding meta: {e}")
 
     async def _process_property_search_and_send(self, user_query: str, user_phone: str, history: List[Dict[str, str]]):
-        """Wrapper: executa process_property_search e envia resultado+persiste via WhatsApp."""
+        """Executa busca de imóveis e envia resultado + CTA quando relevante"""
         try:
             logger.info("Iniciando fluxo de property_search para %s: %s", user_phone, user_query[:120])
-            answer = await self.process_property_search(user_query)
+            
+            # 👈 NOVO: recebe tupla (texto, lista_estruturada)
+            answer, structured_properties = await self.process_property_search(user_query)
+            
             if not answer:
                 answer = "Desculpe, não encontrei imóveis com essas características no momento."
+
+            # 👈 NOVO: Se encontrou imóveis com URL, envia CTA do melhor resultado
+            cta_sent = False
+            if structured_properties and getattr(self, "whatsapp_service", None):
+                try:
+                    # Pega o MELHOR resultado (primeiro da lista já vem ordenado por relevância)
+                    best_property = structured_properties[0]
+                    
+                    # Só envia CTA se tiver URL válida
+                    if best_property.get("url") and best_property["url"].startswith("http"):
+                        logger.info(f"Enviando CTA para melhor imóvel: {best_property.get('title', 'N/A')}")
+                        
+                        cta_success = await self.whatsapp_service.send_property_cta(user_phone, best_property)
+                        
+                        if cta_success:
+                            cta_sent = True
+                            logger.info("CTA enviado com sucesso!")
+                            
+                            # Modifica a resposta de texto para complementar o CTA
+                            answer = f"🏠 Encontrei algumas opções para você!\n\n{answer}\n\n💬 Viu o imóvel em destaque acima? Clique para ver mais detalhes!"
+                        else:
+                            logger.warning("Falha ao enviar CTA, enviando apenas texto")
+                            
+                except Exception as e:
+                    logger.error(f"Erro ao enviar CTA: {e}")
+
             # Persistir mensagem enviada
             try:
                 await asyncio.to_thread(db.collection("messages").add, {
@@ -538,20 +553,27 @@ class IntelligentRealEstateBot:
                     "message": answer,
                     "direction": "sent",
                     "timestamp": datetime.utcnow(),
-                    "metadata": {"ai": True, "flow": "property_search"}
+                    "metadata": {
+                        "ai": True, 
+                        "flow": "property_search",
+                        "cta_sent": cta_sent,  # 👈 NOVO: registra se CTA foi enviado
+                        "properties_found": len(structured_properties)
+                    }
                 })
             except Exception:
                 logger.exception("Falha ao persistir mensagem de property_search no Firestore.")
-            # Enviar via WhatsApp se disponível
+
+            # Enviar texto via WhatsApp (sempre, mesmo se CTA foi enviado)
             if getattr(self, "whatsapp_service", None):
                 try:
                     ok = await self.whatsapp_service.send_message(user_phone, answer)
                     if not ok:
-                        logger.warning("Envio de property_search via WhatsAppService não confirmou sucesso; verifique logs.")
+                        logger.warning("Envio de property_search via WhatsAppService não confirmou sucesso")
                 except Exception:
                     logger.exception("Erro ao enviar property_search via WhatsAppService.")
             else:
                 logger.debug("WhatsAppService não configurado; property_search apenas persistido no Firestore.")
+                
         except Exception as e:
             logger.exception("Erro no fluxo property_search: %s", e)
 
