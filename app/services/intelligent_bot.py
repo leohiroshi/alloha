@@ -535,10 +535,10 @@ class IntelligentRealEstateBot:
                         cta_success = await self.whatsapp_service.send_interactive_cta_url(
                             to=user_phone,
                             image_url=best_property.get("main_image"),
-                            body_text=f"🏡 {best_property.get('title', 'Imóvel encontrado')}\n\n{best_property.get('description', '')[:150]}...",
-                            button_text="🔎 Ver detalhes",
+                            body_text=f"{best_property.get('title', 'Imóvel encontrado')}\n\n{best_property.get('description', '')}...",
+                            button_text="Ver detalhes",
                             url=best_property["url"],
-                            footer_text="Agende sua visita! 📞 (41) 99214-6670"
+                            footer_text="Agende sua visita!"
                         )
                         
                         if cta_success:
@@ -573,11 +573,13 @@ class IntelligentRealEstateBot:
             # Enviar texto via WhatsApp (sempre, mesmo se CTA foi enviado)
             if getattr(self, "whatsapp_service", None):
                 try:
-                    ok = await self.whatsapp_service.send_message(user_phone, answer)
-                    if not ok:
-                        logger.warning("Envio de property_search via WhatsAppService não confirmou sucesso")
+                    if cta_sent:
+                        complementary_text = "💬 Viu o imóvel em destaque acima? Clique no botão para ver mais detalhes!"
+                        await self.whatsapp_service.send_message(user_phone, complementary_text)
+                    else:
+                        await self.whatsapp_service.send_message(user_phone, answer)
                 except Exception:
-                    logger.exception("Erro ao enviar property_search via WhatsAppService.")
+                    logger.exception("Erro ao enviar mensagem no WhatsApp")
             else:
                 logger.debug("WhatsAppService não configurado; property_search apenas persistido no Firestore.")
                 
