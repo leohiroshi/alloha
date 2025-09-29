@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class PropertyImageAnalyzer:
     def __init__(self):
         # Nome do modelo GPT/OpenAI
-        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        self.openai_model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
 
     async def analyze_property_image(self, image_bytes: bytes, prompt: str = "Analyze this property image") -> dict:
         """

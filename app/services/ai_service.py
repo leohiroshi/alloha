@@ -40,16 +40,16 @@ class AIService:
             # Retrieval + RAG
             retrieved = retrieve(message, top_k=5, filters={})
             prompt = build_prompt(message, retrieved)
-            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             return await asyncio.to_thread(call_gpt, prompt, model)
 
         prompt = f"Você é Sofia, assistente da Allega Imóveis.\nUsuário: {message}\nResponda de forma concisa."
-        model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
         return await asyncio.to_thread(call_gpt, prompt, model)
 
     async def generate_text(self, prompt: str) -> str:
         # wrapper async para chamar o GPT (bloqueante) em thread
-        model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
         return await asyncio.to_thread(call_gpt, prompt, model)
 
     @property
@@ -317,7 +317,7 @@ Máximo 250 caracteres."""
                 "Resuma em até 300 caracteres."
             )
 
-            model_name = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            model_name = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             # call_gpt é bloqueante — executar em thread
             llm_response = await asyncio.to_thread(call_gpt, prompt, model_name)
 

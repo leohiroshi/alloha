@@ -78,7 +78,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ## 📞 WhatsApp Integration
 
 Configure webhook URL in Meta for Developers:
-- **Webhook URL**: `https://alloha.app/webhook`
+- **Webhook URL**: `https://api.alloha.app/webhook`
 - **Verify Token**: `alloha_secret`
 
 ## 🤖 AI Capabilities

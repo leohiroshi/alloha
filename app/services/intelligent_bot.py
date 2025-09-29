@@ -164,7 +164,7 @@ class IntelligentRealEstateBot:
             prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])
             logger.info(f"Prompt com histórico para {user_phone}:\n{prompt_with_history[:1000]}")
 
-            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             response_text = await asyncio.to_thread(call_gpt, prompt_with_history, model)
 
             if not response_text:
@@ -260,7 +260,7 @@ class IntelligentRealEstateBot:
                 prompt += f"{role}: {msg['content']}\n"
             prompt += "Sofia:"
 
-            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             response_text = await asyncio.to_thread(call_gpt, prompt, model)
             return response_text.strip() if response_text else (
                 "😅 Tive dificuldade técnica para responder no momento. Por favor, tente novamente em instantes."
@@ -293,7 +293,7 @@ class IntelligentRealEstateBot:
                 + "\n".join([f"{h['role']}: {h['content']}" for h in history])
                 + f"\n\nMESSAGE:\n{message}\n\nReturn JSON example:\n{json.dumps(example, ensure_ascii=False)}\n\nJSON:"
             )
-            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             resp = await asyncio.to_thread(call_gpt, prompt, model)
             if not resp:
                 return {}
@@ -348,7 +348,7 @@ class IntelligentRealEstateBot:
             # 1) recuperar localmente
             retrieved = retrieve(user_query, top_k=5, filters={})
             prompt = build_prompt(user_query, retrieved)
-            model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             answer = await asyncio.to_thread(call_gpt, prompt, model)
 
             # construir candidates para exibição
@@ -415,7 +415,7 @@ class IntelligentRealEstateBot:
     async def _call_sofia_vision(self, prompt: str, image_base64: str, model_name: Optional[str] = None) -> str:
         """Envio de prompt + imagem (base64) para o GPT via call_gpt (executa em thread)."""
         try:
-            model = model_name or os.getenv("OPENAI_MODEL", "gpt-5-mini")
+            model = model_name or os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
             full_prompt = prompt + "\n\n---BEGIN_IMAGE_BASE64---\n" + image_base64 + "\n---END_IMAGE_BASE64---\n\n"
             full_prompt += "Resuma em até 300 caracteres e destaque campos relevantes."
             resp = await asyncio.to_thread(call_gpt, full_prompt, model)

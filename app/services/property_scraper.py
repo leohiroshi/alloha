@@ -56,7 +56,7 @@ class AllegaPropertyScraper:
         self._driver = None
 
         # GPT/OpenAI model
-        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        self.openai_model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
 
         # Firebase service
         self.firebase = FirebaseService()
