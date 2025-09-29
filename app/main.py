@@ -184,7 +184,7 @@ async def webhook_handler(request: Request):
     """Handler para mensagens do WhatsApp"""
     try:
         body = await request.json()
-        logger.info(f"Received webhook payload: {body}")
+        # logger.info(f"Received webhook payload: {body}")
         stop_presence_event = asyncio.Event()
 
         # Processar mensagens recebidas
