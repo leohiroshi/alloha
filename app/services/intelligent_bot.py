@@ -662,33 +662,44 @@ class IntelligentRealEstateBot:
             logger.debug(f"Erro salvar embedding meta: {e}")
 
     async def _process_property_search_and_send(self, user_query: str, user_phone: str, history: List[Dict[str, str]]):
-        """Executa busca de imóveis e envia resultado + CTA quando relevante"""
+        """
+        Executa busca de imóveis com novo fluxo:
+        1) PRIMEIRO: Envia resposta natural da Sofia
+        2) DEPOIS: Decide se deve enviar CTA baseado na resposta
+        """
         try:
             logger.info("Iniciando fluxo de property_search para %s: %s", user_phone, user_query[:120])
             
-            # 👈 NOVO: recebe tupla (texto, lista_estruturada)
+            # 1) PRIMEIRO: Buscar imóveis e gerar resposta natural
             answer, structured_properties = await self.process_property_search(user_query)
             
             if not answer:
                 answer = "Desculpe, não encontrei imóveis com essas características no momento."
 
-            # 👈 NOVO: Se encontrou imóveis com URL, envia CTA do melhor resultado
+            # 2) SEMPRE enviar a resposta da Sofia PRIMEIRO
+            if getattr(self, "whatsapp_service", None):
+                try:
+                    await self.whatsapp_service.send_message(user_phone, answer)
+                    logger.info("Resposta da Sofia enviada com sucesso")
+                except Exception:
+                    logger.exception("Erro ao enviar resposta da Sofia")
+
+            # 3) DEPOIS: Decidir se deve enviar CTA baseado na resposta da Sofia
+            should_send_cta = await self._should_send_cta(answer, user_query, structured_properties)
+            
             cta_sent = False
-            logger.debug("structured_properties count=%d content_preview=%s", len(structured_properties), repr(structured_properties)[:800])
-            if structured_properties and getattr(self, "whatsapp_service", None):
+            if should_send_cta and structured_properties and getattr(self, "whatsapp_service", None):
                 try:
                     # Pega o MELHOR resultado (primeiro da lista já vem ordenado por relevância)
                     best_property = structured_properties[0]
-                    logger.debug("Best property selected for CTA: id=%s url=%s title=%s", best_property.get("id"), best_property.get("url"), best_property.get("title"))
-                     
+                    logger.debug("Best property selected for CTA: id=%s url=%s title=%s", 
+                            best_property.get("id"), best_property.get("url"), best_property.get("title"))
                     
                     # Só envia CTA se tiver URL válida
                     if best_property.get("url") and best_property["url"].startswith("http"):
                         has_method = getattr(self.whatsapp_service, "send_interactive_cta_url", None) is not None
                         logger.debug("WhatsAppService has send_interactive_cta_url=%s", has_method)
-                        if not has_method:
-                            logger.warning("WhatsAppService missing send_interactive_cta_url; skipping CTA and will send text fallback.")
-                        else:
+                        if has_method:
                             logger.info(f"Enviando CTA para melhor imóvel: {best_property.get('title', 'N/A')}")
                         
                             cta_success = await self.whatsapp_service.send_interactive_cta_url(
@@ -700,19 +711,22 @@ class IntelligentRealEstateBot:
                                 footer_text="Agende sua visita!"
                             )
                         
-                        if cta_success:
-                            cta_sent = True
-                            logger.info("CTA enviado com sucesso!")
-                            
-                            # Modifica a resposta de texto para complementar o CTA
-                            answer = f"🏠 Encontrei algumas opções para você!\n\n{answer}\n\n💬 Viu o imóvel em destaque acima? Clique para ver mais detalhes!"
+                            if cta_success:
+                                cta_sent = True
+                                logger.info("CTA enviado com sucesso!")
+                                
+                                # Enviar mensagem complementar ao CTA
+                                complementary_text = "💬 Viu o imóvel em destaque acima? Clique no botão para ver mais detalhes!"
+                                await self.whatsapp_service.send_message(user_phone, complementary_text)
+                            else:
+                                logger.warning("Falha ao enviar CTA")
                         else:
-                            logger.warning("Falha ao enviar CTA, enviando apenas texto")
+                            logger.warning("WhatsAppService missing send_interactive_cta_url; skipping CTA")
                             
                 except Exception as e:
                     logger.error(f"Erro ao enviar CTA: {e}")
 
-            # Persistir mensagem enviada
+            # 4) Persistir mensagem enviada
             try:
                 await asyncio.to_thread(db.collection("messages").add, {
                     "user_phone": user_phone,
@@ -722,28 +736,84 @@ class IntelligentRealEstateBot:
                     "metadata": {
                         "ai": True, 
                         "flow": "property_search",
-                        "cta_sent": cta_sent,  # 👈 NOVO: registra se CTA foi enviado
-                        "properties_found": len(structured_properties)
+                        "cta_sent": cta_sent,
+                        "properties_found": len(structured_properties),
+                        "should_send_cta": should_send_cta
                     }
                 })
             except Exception:
                 logger.exception("Falha ao persistir mensagem de property_search no Firestore.")
-
-            # Enviar texto via WhatsApp (sempre, mesmo se CTA foi enviado)
-            if getattr(self, "whatsapp_service", None):
-                try:
-                    if cta_sent:
-                        complementary_text = "💬 Viu o imóvel em destaque acima? Clique no botão para ver mais detalhes!"
-                        await self.whatsapp_service.send_message(user_phone, complementary_text)
-                    else:
-                        await self.whatsapp_service.send_message(user_phone, answer)
-                except Exception:
-                    logger.exception("Erro ao enviar mensagem no WhatsApp")
-            else:
-                logger.debug("WhatsAppService não configurado; property_search apenas persistido no Firestore.")
                 
         except Exception as e:
             logger.exception("Erro no fluxo property_search: %s", e)
+
+
+    async def _should_send_cta(self, sofia_response: str, user_query: str, structured_properties: list) -> bool:
+        """
+        Decide se deve enviar CTA baseado na resposta da Sofia.
+        Usa NLU para analisar se a resposta indica que encontrou imóveis específicos
+        ou se está pedindo mais informações do cliente.
+        """
+        try:
+            # Se não tem propriedades estruturadas, não envia CTA
+            if not structured_properties:
+                logger.debug("Não enviando CTA: nenhuma propriedade estruturada encontrada")
+                return False
+            
+            # Usar LLM para analisar se a resposta da Sofia indica que deve enviar CTA
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            prompt = (
+                "Analise se a resposta da Sofia indica que ela ENCONTROU IMÓVEIS ESPECÍFICOS "
+                "e está apresentando opções concretas, ou se ela está PEDINDO MAIS INFORMAÇÕES "
+                "para refinar a busca.\n\n"
+                f"Pergunta do cliente: \"{user_query}\"\n"
+                f"Resposta da Sofia: \"{sofia_response}\"\n\n"
+                "Retorne JSON: {\"should_send_cta\": true/false, \"reason\": \"explicação\"}\n\n"
+                "Exemplos:\n"
+                "- Se Sofia apresentou imóveis específicos → {\"should_send_cta\": true, \"reason\": \"apresentou opções\"}\n"
+                "- Se Sofia pediu mais detalhes/preferências → {\"should_send_cta\": false, \"reason\": \"precisa mais info\"}\n"
+                "- Se Sofia disse que não encontrou nada → {\"should_send_cta\": false, \"reason\": \"sem resultados\"}"
+            )
+            
+            resp = await asyncio.to_thread(rag.call_gpt, prompt, model)
+            if not resp:
+                logger.debug("NLU CTA decision: resposta vazia, não enviando CTA")
+                return False
+
+            # Extrair JSON da resposta
+            start = resp.find("{")
+            end = resp.rfind("}") + 1
+            json_text = resp[start:end] if start != -1 and end != -1 else resp
+            data = json.loads(json_text)
+            
+            should_send = data.get("should_send_cta", False)
+            reason = data.get("reason", "sem razão")
+            
+            logger.info(f"NLU CTA decision: should_send={should_send}, reason='{reason}'")
+            return should_send
+            
+        except Exception as e:
+            logger.debug(f"Erro na decisão de CTA via NLU: {e}")
+            
+            # Fallback: heurística simples
+            # Se a resposta contém palavras que indicam que está pedindo mais info, não envia CTA
+            asking_keywords = [
+                "que tal me contar", "mais detalhes", "suas preferências", 
+                "refinar a busca", "me conte", "gostaria de saber",
+                "qual seu orçamento", "quantos quartos", "qual bairro",
+                "para alugar ou comprar", "mais informações"
+            ]
+            
+            response_lower = sofia_response.lower()
+            is_asking_more_info = any(keyword in response_lower for keyword in asking_keywords)
+            
+            if is_asking_more_info:
+                logger.info("Fallback CTA decision: Sofia está pedindo mais informações, não enviando CTA")
+                return False
+            
+            # Se tem propriedades e não está pedindo mais info, envia CTA
+            logger.info("Fallback CTA decision: enviando CTA (tem propriedades e não está pedindo mais info)")
+            return len(structured_properties) > 0
 
 
 # Instância global do bot
