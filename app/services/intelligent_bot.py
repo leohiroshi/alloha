@@ -664,8 +664,9 @@ class IntelligentRealEstateBot:
     async def _process_property_search_and_send(self, user_query: str, user_phone: str, history: List[Dict[str, str]]):
         """
         Executa busca de imóveis com novo fluxo:
-        1) PRIMEIRO: Envia resposta natural da Sofia
-        2) DEPOIS: Decide se deve enviar CTA baseado na resposta
+        1) PRIMEIRO: Buscar imóveis e decidir se deve enviar CTA
+        2) Se vai enviar CTA: envia APENAS o CTA (sem resposta natural)
+        3) Se NÃO vai enviar CTA: envia resposta natural
         """
         try:
             logger.info("Iniciando fluxo de property_search para %s: %s", user_phone, user_query[:120])
@@ -676,15 +677,7 @@ class IntelligentRealEstateBot:
             if not answer:
                 answer = "Desculpe, não encontrei imóveis com essas características no momento."
 
-            # 2) SEMPRE enviar a resposta da Sofia PRIMEIRO
-            if getattr(self, "whatsapp_service", None):
-                try:
-                    await self.whatsapp_service.send_message(user_phone, answer)
-                    logger.info("Resposta da Sofia enviada com sucesso")
-                except Exception:
-                    logger.exception("Erro ao enviar resposta da Sofia")
-
-            # 3) DEPOIS: Decidir se deve enviar CTA baseado na resposta da Sofia
+            # 2) DECIDIR se deve enviar CTA baseado na resposta da Sofia
             should_send_cta = await self._should_send_cta(answer, user_query, structured_properties)
             
             cta_sent = False
@@ -714,10 +707,7 @@ class IntelligentRealEstateBot:
                             if cta_success:
                                 cta_sent = True
                                 logger.info("CTA enviado com sucesso!")
-                                
-                                # Enviar mensagem complementar ao CTA
-                                complementary_text = "💬 Viu o imóvel em destaque acima? Clique no botão para ver mais detalhes!"
-                                await self.whatsapp_service.send_message(user_phone, complementary_text)
+                                # ✅ NÃO envia mensagem complementar - só o CTA
                             else:
                                 logger.warning("Falha ao enviar CTA")
                         else:
@@ -726,23 +716,32 @@ class IntelligentRealEstateBot:
                 except Exception as e:
                     logger.error(f"Erro ao enviar CTA: {e}")
 
-            # 4) Persistir mensagem enviada
-            try:
-                await asyncio.to_thread(db.collection("messages").add, {
-                    "user_phone": user_phone,
-                    "message": answer,
-                    "direction": "sent",
-                    "timestamp": datetime.utcnow(),
-                    "metadata": {
-                        "ai": True, 
-                        "flow": "property_search",
-                        "cta_sent": cta_sent,
-                        "properties_found": len(structured_properties),
-                        "should_send_cta": should_send_cta
-                    }
-                })
-            except Exception:
-                logger.exception("Falha ao persistir mensagem de property_search no Firestore.")
+            # 3) Se NÃO enviou CTA, envia resposta natural da Sofia
+            if not cta_sent and getattr(self, "whatsapp_service", None):
+                try:
+                    await self.whatsapp_service.send_message(user_phone, answer)
+                    logger.info("Resposta da Sofia enviada com sucesso")
+                except Exception:
+                    logger.exception("Erro ao enviar resposta da Sofia")
+
+            # 4) Persistir mensagem enviada (só se não foi CTA)
+            if not cta_sent:
+                try:
+                    await asyncio.to_thread(db.collection("messages").add, {
+                        "user_phone": user_phone,
+                        "message": answer,
+                        "direction": "sent",
+                        "timestamp": datetime.utcnow(),
+                        "metadata": {
+                            "ai": True, 
+                            "flow": "property_search",
+                            "cta_sent": cta_sent,
+                            "properties_found": len(structured_properties),
+                            "should_send_cta": should_send_cta
+                        }
+                    })
+                except Exception:
+                    logger.exception("Falha ao persistir mensagem de property_search no Firestore.")
                 
         except Exception as e:
             logger.exception("Erro no fluxo property_search: %s", e)
