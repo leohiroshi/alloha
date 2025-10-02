@@ -394,6 +394,36 @@ class FirebaseService:
             ref = db.collection('properties').document(prop['reference'])
             batch.update(ref, prop)
         batch.commit()
+    
+    async def get_recent_conversations(self, since: datetime, limit: int = 100) -> List[Dict]:
+        """Busca conversas recentes para dataset expansion"""
+        try:
+            if not self.db:
+                logger.warning("Firebase não conectado")
+                return []
+            
+            messages_ref = self.db.collection("messages")
+            
+            # Query otimizada com filtro de data
+            query = (messages_ref
+                    .where(filter=FieldFilter("timestamp", ">=", since))
+                    .order_by("timestamp", direction="DESCENDING")
+                    .limit(limit))
+            
+            messages = []
+            docs = query.stream()
+            
+            for doc in docs:
+                data = doc.to_dict()
+                data['id'] = doc.id
+                messages.append(data)
+            
+            logger.info(f"Dataset expansion: {len(messages)} mensagens desde {since}")
+            return messages
+            
+        except Exception as e:
+            logger.error(f"Erro ao buscar conversas recentes: {e}")
+            return []
 
 # Instância global
 firebase_service = FirebaseService()

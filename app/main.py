@@ -1,17 +1,25 @@
-# Integração do PropertyImageAnalyzer com main.py
+# Sistema Inteligente de Imóveis - Allega Imóveis
 
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict
 from app.services.whatsapp_service import WhatsAppService
 from app.services.intelligent_bot import intelligent_bot
 from app.services.property_intelligence import property_intelligence
 from app.services.property_scraper import monitor_scraper
 from app.services.rag_pipeline import rag
+from app.services.dataset_living_loop import dataset_living_loop
+from app.services.dual_stack_intelligence import dual_stack_intelligence
+from app.services.urgency_score_system import urgency_score_system
+from app.services.autonomous_followup import autonomous_followup
+from app.services.voice_ptt_system import voice_ptt_system
+from app.services.live_pricing_system import live_pricing_system
+from app.services.white_label_system import white_label_system
 import asyncio
 
 # Configurar logging
@@ -41,6 +49,43 @@ PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 
 # Inicializar serviços
 whatsapp_service = WhatsAppService(ACCESS_TOKEN, PHONE_NUMBER_ID)
+
+@app.on_event("startup")
+async def startup_event():
+    """Eventos de inicialização da aplicação"""
+    logger.info("🚀 Iniciando SISTEMA DUAL-STACK + DIFERENCIAIS...")
+    
+    # Iniciar loops de background
+    try:
+        # Dataset living loop
+        asyncio.create_task(dataset_living_loop.start_continuous_loop())
+        logger.info("✅ Dataset living loop iniciado")
+        
+        # Sistema de preços ao vivo (sync a cada 30min)
+        asyncio.create_task(live_pricing_system.start_live_sync_loop())
+        logger.info("✅ Live pricing system iniciado")
+        
+        # Limpeza de cache de voz a cada hora
+        async def cleanup_voice_cache():
+            while True:
+                await asyncio.sleep(3600)  # 1 hora
+                await voice_ptt_system.cleanup_old_cache()
+        
+        asyncio.create_task(cleanup_voice_cache())
+        
+        # Inicializar Google Calendar para agendamentos autônomos
+        calendar_initialized = await autonomous_followup.initialize_calendar_service()
+        if calendar_initialized:
+            logger.info("✅ Google Calendar inicializado para agendamentos autônomos")
+        else:
+            logger.warning("⚠️ Google Calendar não configurado - agendamentos em modo fallback")
+        
+        # Monitor de scraping
+        asyncio.create_task(monitor_scraper())
+        logger.info("✅ Property monitor iniciado")
+        
+    except Exception as e:
+        logger.error(f"❌ Erro na inicialização: {e}")
     
 @app.get("/")
 async def root():
@@ -181,21 +226,52 @@ async def verify_webhook(request: Request):
 
 @app.post("/webhook")
 async def webhook_handler(request: Request):
-    """Handler para mensagens do WhatsApp"""
+    """Handler idempotente para mensagens do WhatsApp"""
     try:
         body = await request.json()
-        # logger.info(f"Received webhook payload: {body}")
-        stop_presence_event = asyncio.Event()
-
-        # Processar mensagens recebidas
-        if "messages" in body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}):
-            await process_whatsapp_message(body)
         
-        return {"status": "success"}
+        # Importar serviço de idempotência
+        from app.services.webhook_idempotency import webhook_idempotency
+        
+        # 1) RESPONDER 200 IMEDIATAMENTE (como requerido pela Meta)
+        response_data = {"status": "success"}
+        
+        # 2) Verificar duplicação
+        if await webhook_idempotency.is_duplicate(body):
+            logger.info("Webhook duplicado ignorado")
+            return response_data
+        
+        # 3) Marcar como processando
+        fingerprint = await webhook_idempotency.mark_as_processing(body)
+        if not fingerprint:
+            logger.info("Webhook já sendo processado por outra thread")
+            return response_data
+        
+        # 4) Processar em background (não bloqueia resposta 200)
+        if "messages" in body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}):
+            asyncio.create_task(process_whatsapp_message_safe(body, fingerprint))
+        else:
+            await webhook_idempotency.mark_as_completed(fingerprint, {"skipped": "no_messages"})
+        
+        return response_data
     
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Ainda responde 200 para não quebrar com a Meta
+        return {"status": "error", "message": str(e)}
+
+async def process_whatsapp_message_safe(webhook_data, fingerprint: str):
+    """Wrapper seguro que marca conclusão/falha"""
+    try:
+        from app.services.webhook_idempotency import webhook_idempotency
+        
+        await process_whatsapp_message(webhook_data)
+        await webhook_idempotency.mark_as_completed(fingerprint)
+        
+    except Exception as e:
+        from app.services.webhook_idempotency import webhook_idempotency
+        logger.error(f"Erro no processamento seguro: {e}")
+        await webhook_idempotency.mark_as_failed(fingerprint, str(e))
 
 async def process_whatsapp_message(webhook_data):
     """Processar mensagem recebida do WhatsApp com inteligência avançada e suporte a imagens"""
@@ -289,25 +365,31 @@ async def process_image_message(message: Dict, from_number: str, webhook_data: D
         
         logger.info(f"📸 Image downloaded: {len(image_data)} bytes")
         
-        # NOVA INTEGRAÇÃO: Usar PropertyChatbot para análise de imagens
+        # Análise de imagem usando Sofia Vision
         try:
-            # Usar o chatbot integrado com PropertyImageAnalyzer
             response = await intelligent_bot.process_image_message(
                 image_data=image_data,
                 caption=caption,
                 user_phone=from_number
             )
             
-            logger.info(f"✅ PropertyChatbot analysis completed for {from_number}")
+            logger.info(f"✅ Image analysis completed for {from_number}")
             
         except Exception as analyzer_error:
-            logger.error(f"PropertyChatbot error: {str(analyzer_error)}")
+            logger.error(f"Image analysis error: {str(analyzer_error)}")
             
-            # Fallback para o sistema original
-            if caption and any(word in caption.lower() for word in ['disponível', 'disponivel', 'status', 'verificar']):
-                response = await intelligent_bot.check_property_availability_from_image(image_data, from_number)
-            else:
-                response = await intelligent_bot.process_image_message(image_data, caption, from_number)
+            # Fallback para resposta de erro
+            response = (
+                "📸 Recebi sua imagem!\n\n"
+                "😅 Tive dificuldade técnica para analisá-la no momento.\n\n"
+                "🏠 *Mas posso ajudar de outras formas:*\n"
+                "• Descreva o imóvel que procura\n"
+                "• Informe sua localização preferida\n"
+                "• Conte sobre seu orçamento\n\n"
+                "📞 *Ou entre em contato direto:*\n"
+                "🏠 Vendas: (41) 99214-6670\n"
+                "🏡 Locação: (41) 99223-0874"
+            )
         
         # Enviar resposta
         success = await whatsapp_service.send_message(from_number, response)
@@ -406,26 +488,19 @@ async def test_image_analysis(request: Request):
                 else:
                     raise HTTPException(status_code=400, detail="Failed to download image")
         
-        # NOVA INTEGRAÇÃO: Testar com PropertyChatbot
+        # Testar análise de imagem com Sofia Vision
         try:
-            # Determinar mensagem baseada no tipo de análise
-            test_message = "verificar disponibilidade" if analysis_type == "availability" else "analisar imóvel completo"
-            
-            # Usar PropertyChatbot para análise
             response = await intelligent_bot.process_image_message(
                 image_data=image_data,
-                caption=caption,
+                caption=caption or "",
                 user_phone=user_phone
             )
             
         except Exception as analyzer_error:
-            logger.error(f"PropertyChatbot test error: {str(analyzer_error)}")
+            logger.error(f"Image analysis test error: {str(analyzer_error)}")
             
-            # Fallback para sistema original
-            if analysis_type == "availability":
-                response = await intelligent_bot.check_property_availability_from_image(image_data, user_phone)
-            else:
-                response = await intelligent_bot.process_image_message(image_data, "", user_phone)
+            # Fallback para erro de teste
+            response = f"Erro ao analisar imagem de teste: {str(analyzer_error)}"
         
         return {
             "image_url": image_url,
@@ -489,8 +564,13 @@ async def get_property_statistics():
 
 @app.get("/system/status")
 async def get_system_status():
-    """Status detalhado do sistema"""
+    """Status detalhado do sistema com métricas de performance"""
     try:
+        # Importar serviços otimizados
+        from app.services.embedding_cache import embedding_cache
+        from app.services.webhook_idempotency import webhook_idempotency
+        from app.models.conversation_state import conversation_manager
+        
         status_info = await intelligent_bot._get_system_status()
         
         return {
@@ -498,10 +578,17 @@ async def get_system_status():
             "components": {
                 "whatsapp_service": bool(ACCESS_TOKEN and PHONE_NUMBER_ID),
                 "firebase_service": bool(intelligent_bot.firebase_service),
-                "ai_service": bool(intelligent_bot.ai_service.api_key),
                 "property_intelligence": bool(intelligent_bot.property_intelligence),
-                "intelligent_bot": True,  # PropertyChatbot integrado
-                "image_analyzer": True,  # Componente original
+                "intelligent_bot": True,
+                "sofia_vision": True,  # Análise de imagens integrada
+                "embedding_cache": True,
+                "conversation_manager": True,
+                "webhook_idempotency": True
+            },
+            "performance_metrics": {
+                "embedding_cache": embedding_cache.get_stats(),
+                "webhook_idempotency": webhook_idempotency.get_stats(),
+                "active_conversations": len(conversation_manager.get_active_conversations())
             },
             "environment": {
                 "verify_token_set": bool(VERIFY_TOKEN),
@@ -513,6 +600,276 @@ async def get_system_status():
         
     except Exception as e:
         logger.error(f"Error getting system status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/dataset/status")
+async def get_dataset_status():
+    """Status do sistema de dataset living"""
+    try:
+        from app.services.dataset_living_loop import dataset_living_loop
+        
+        status = dataset_living_loop.get_status()
+        
+        # Adicionar estatísticas dos arquivos
+        datasets_dir = Path("datasets")
+        dataset_files = []
+        
+        if datasets_dir.exists():
+            for file_path in datasets_dir.rglob("*.jsonl"):
+                if "train" in file_path.name:
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            line_count = sum(1 for _ in f)
+                        
+                        dataset_files.append({
+                            "filename": file_path.name,
+                            "path": str(file_path),
+                            "examples": line_count,
+                            "size_mb": file_path.stat().st_size / (1024 * 1024),
+                            "created": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+                        })
+                    except Exception:
+                        pass
+        
+        return {
+            "living_loop": status,
+            "available_datasets": sorted(dataset_files, key=lambda x: x["created"], reverse=True),
+            "total_datasets": len(dataset_files),
+            "status": "success"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting dataset status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dataset/expand")
+async def expand_dataset_now():
+    """Força expansão imediata do dataset"""
+    try:
+        from app.services.dataset_expander import dataset_expander
+        
+        # Buscar conversas dos últimos 7 dias
+        since = datetime.utcnow() - timedelta(days=7)
+        examples = await dataset_expander.expand_from_firebase(limit=100)
+        
+        if not examples:
+            return {
+                "status": "no_data",
+                "message": "Nenhuma conversa encontrada para expansão"
+            }
+        
+        # Aplicar data augmentation
+        augmented = await dataset_expander.data_augment_examples(examples, target_multiplier=3)
+        
+        # Salvar dataset
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        train_path = dataset_expander.save_expanded_dataset(augmented, f"manual_{timestamp}")
+        
+        return {
+            "status": "success",
+            "original_examples": len(examples),
+            "augmented_examples": len(augmented),
+            "train_file": train_path,
+            "message": f"Dataset expandido com {len(augmented)} exemplos"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error expanding dataset: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==============================================
+# ENDPOINTS SISTEMA DUAL-STACK + DIFERENCIAIS  
+# ==============================================
+
+@app.post("/api/dual-stack/query")
+async def dual_stack_query(request: Request):
+    """API para consultas com sistema dual-stack"""
+    try:
+        data = await request.json()
+        
+        user_message = data.get("message", "")
+        user_phone = data.get("phone", "")
+        conversation_history = data.get("history", [])
+        
+        if not user_message or not user_phone:
+            raise HTTPException(status_code=400, detail="Mensagem e telefone são obrigatórios")
+        
+        # Processar com dual-stack
+        result = await dual_stack_intelligence.process_dual_stack_query(
+            user_message=user_message,
+            user_phone=user_phone,
+            conversation_history=conversation_history
+        )
+        
+        # Analisar urgência
+        urgency_alert = await urgency_score_system.analyze_urgency(
+            message=user_message,
+            phone=user_phone,
+            conversation_history=conversation_history
+        )
+        
+        # Se urgência alta, tentar agendamento autônomo
+        if urgency_alert.urgency_score >= 4:
+            client_name = data.get("client_name", "Cliente")
+            
+            scheduling_result = await autonomous_followup.schedule_autonomous_visit(
+                phone=user_phone,
+                client_name=client_name,
+                urgency_score=urgency_alert.urgency_score,
+                property_interests=result.get("properties", [])
+            )
+            
+            result["autonomous_scheduling"] = scheduling_result
+        
+        result["urgency_analysis"] = {
+            "score": urgency_alert.urgency_score,
+            "reasons": urgency_alert.urgency_reasons,
+            "suggested_actions": urgency_alert.suggested_actions
+        }
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Erro na consulta dual-stack: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/fresh-properties")
+async def get_fresh_properties(
+    query: str = "",
+    neighborhood: str = None,
+    min_price: float = None,
+    max_price: float = None,
+    bedrooms: int = None,
+    limit: int = 10
+):
+    """API para buscar apenas propriedades frescas (< 6h)"""
+    try:
+        filters = {}
+        
+        if neighborhood:
+            filters["neighborhood"] = neighborhood
+        if min_price:
+            filters["price"] = {"$gte": min_price}
+        if max_price:
+            if "price" in filters:
+                filters["price"]["$lte"] = max_price
+            else:
+                filters["price"] = {"$lte": max_price}
+        if bedrooms:
+            filters["bedrooms"] = bedrooms
+        
+        # Buscar apenas propriedades frescas
+        results = await live_pricing_system.get_fresh_properties_only(
+            query=query,
+            filters=filters,
+            limit=limit
+        )
+        
+        return {
+            "success": True,
+            "count": len(results),
+            "properties": results,
+            "freshness_hours": live_pricing_system.freshness_hours,
+            "last_sync": live_pricing_system.sync_stats.get("last_sync_time")
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na busca de propriedades frescas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/urgency/alerts")
+async def get_urgency_alerts(limit: int = 50):
+    """API para dashboard de alerts de urgência"""
+    try:
+        alerts = await urgency_score_system.get_pending_alerts(limit)
+        
+        return {
+            "success": True,
+            "count": len(alerts),
+            "alerts": alerts,
+            "stats": urgency_score_system.get_urgency_stats()
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao buscar alerts de urgência: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/urgency/mark-contacted/{alert_id}")
+async def mark_alert_contacted(alert_id: str, broker_name: str = Body(...)):
+    """Marca alert de urgência como contatado"""
+    try:
+        await urgency_score_system.mark_alert_as_contacted(alert_id, broker_name)
+        
+        return {
+            "success": True,
+            "message": f"Alert {alert_id} marcado como contatado por {broker_name}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao marcar alert como contatado: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/white-label/create")
+async def create_white_label_site(
+    company_name: str = Body(...),
+    company_email: str = Body(...),
+    template_id: str = Body("modern"),
+    custom_domain: str = Body(None),
+    branding: dict = Body(None)
+):
+    """Cria site white-label instantâneo"""
+    try:
+        result = await white_label_system.create_white_label_site(
+            company_name=company_name,
+            company_email=company_email,
+            template_id=template_id,
+            custom_domain=custom_domain,
+            branding=branding
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Erro ao criar site white-label: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stats/dashboard")
+async def get_dashboard_stats():
+    """Estatísticas completas do dashboard"""
+    try:
+        stats = {
+            "dual_stack": dual_stack_intelligence.get_cache_stats(),
+            "urgency_system": urgency_score_system.get_urgency_stats(),
+            "voice_ptt": voice_ptt_system.get_voice_stats(),
+            "live_pricing": await live_pricing_system.get_pricing_stats(),
+            "white_label": white_label_system.get_deployment_stats(),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        return {
+            "success": True,
+            "stats": stats
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter estatísticas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/dataset/trigger-update")
+async def trigger_dataset_update():
+    """Dispara atualização manual do dataset living"""
+    try:
+        # Executar check manual (sem esperar intervalo)
+        await dataset_living_loop.check_and_update_dataset()
+        
+        return {
+            "status": "success",
+            "message": "Atualização do dataset disparada manualmente",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error triggering dataset update: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/run-property-scraper")

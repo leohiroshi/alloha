@@ -17,6 +17,9 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from app.services.rag_pipeline import rag
 from app.services.property_intelligence import property_intelligence
+from app.services.embedding_cache import embedding_cache
+from app.models.conversation_state import conversation_manager, ConversationState
+from app.services.webhook_idempotency import webhook_idempotency
 
 from app.services.whatsapp_service import WhatsAppService  # assume exists in workspace
 from app.services.firebase_service import firebase_service
@@ -81,22 +84,33 @@ class IntelligentRealEstateBot:
 
     async def process_message(self, message: str, user_phone: str) -> str:
         """
-        Processa mensagem do usuário.
-        Não cria placeholder "digitando..." no Firestore. Em vez disso:
-         - salva a mensagem recebida;
-         - inicia um background task que periodicamente envia typing indicator via WhatsApp;
-         - gera a resposta em background e envia a mensagem final.
+        Processa mensagem com otimizações de escala:
+        - State machine para evitar race conditions
+        - Cache de embeddings para reduzir latência
+        - Processamento thread-safe
         """
         try:
             logger.info(f"📨 Mensagem de {user_phone}: {message[:100]}")
 
-            # 1) Salva mensagem recebida (received)
+            # 1) Gerenciar estado da conversa (thread-safe)
+            conversation = await conversation_manager.get_or_create_conversation(user_phone)
+            current_state = conversation["state"]
+            
+            # 2) Verificar se já está processando para evitar duplicação
+            if current_state == ConversationState.PENDING:
+                await conversation_manager.transition_state(
+                    user_phone, 
+                    ConversationState.PENDING,
+                    {"processing": True, "last_message": message}
+                )
+
+            # 3) Salva mensagem recebida (received)
             await asyncio.to_thread(db.collection("messages").add, {
                 "user_phone": user_phone,
                 "message": message,
                 "direction": "received",
                 "timestamp": datetime.utcnow(),
-                "metadata": {}
+                "metadata": {"conversation_state": current_state.value}
             })
             logger.info(f"Mensagem salva no Firestore para {user_phone}.")
 
