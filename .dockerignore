@@ -1,0 +1,76 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+dist
+build
+.venv
+venv
+env
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.*
+*.env
+
+# Credentials
+*credentials*.json
+firebase-credentials.json
+alloha-credentials.json
+
+# Backups
+backups/
+backup_*.json
+
+# Scripts de migração (não necessários em produção)
+scripts/migrate_*.py
+scripts/backup_*.py
+scripts/test_*.py
+scripts/validate_*.py
+scripts/load_test_*.py
+scripts/inspect_*.py
+scripts/cleanup_*.py
+scripts/retry_*.py
+scripts/fix_*.py
+scripts/check_*.py
+scripts/expand_*.py
+
+# Datasets
+datasets/
+sofia_training_data.jsonl
+
+# Documentation
+README.md
+MIGRATION_GUIDE.md
+*.md
+
+# CI/CD
+.github/
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Misc
+.DS_Store
+Thumbs.db

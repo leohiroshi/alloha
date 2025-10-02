@@ -42,10 +42,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy only runtime code (keep out secrets)
 # - app/: Python application package
-# - chroma_db/: local vector db metadata if used at runtime (optional)
-# - scripts/: utility scripts if required
 COPY app/ /app/app
-COPY chroma_db/ /app/chroma_db
 
 # Ensure app path is on PYTHONPATH
 ENV PYTHONPATH=/app
