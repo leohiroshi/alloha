@@ -1,98 +1,68 @@
-#############################
-# Stage 1: Builder / Dependencies
-#############################
-FROM python:3.10-slim AS builder
+# Alloha.app - AI Chat System for Real Estate
+# Dockerfile for Azure Container Apps deployment
 
+FROM python:3.10-slim
+
+# Build args
 ARG INSTALL_BROWSER=false
 ARG INSTALL_TORCH=true
-ARG PRELOAD_MODELS=true
-
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
-
-WORKDIR /build
-
-# System build deps (removed later)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ build-essential \
-    curl wget gnupg ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Optional browser (Selenium) layer
-RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends chromium chromium-driver && \
-      rm -rf /var/lib/apt/lists/* ; \
-    fi
-
-# Copy only requirements first (cache layer)
-COPY requirements.txt requirements.txt
-
-# Install base numeric dep early to stabilize wheels
-RUN pip install "numpy<2.0.0"
-
-# Torch (CPU) optional
-RUN if [ "$INSTALL_TORCH" = "true" ]; then \
-      pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.2.2+cpu" ; \
-    fi
-
-# Remaining deps
-RUN pip install -r requirements.txt
-
-# Preload models to reduce cold start (stored under /root/.cache)
-RUN if [ "$PRELOAD_MODELS" = "true" ]; then \
-    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('all-MiniLM-L6-v2'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2'); print('Models preloaded')" ; \
-    fi
-
-# Create a virtualenv (optional slimming technique)
-RUN python -m venv /venv && /venv/bin/pip install --upgrade pip && \
-    /venv/bin/pip install -r requirements.txt && \
-    if [ "$INSTALL_TORCH" = "true" ]; then /venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.2.2+cpu" ; fi
-
-#############################
-# Stage 2: Runtime Image
-#############################
-FROM python:3.10-slim AS runtime
-ARG INSTALL_BROWSER=false
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/venv/bin:$PATH" \
-    PYTHONPATH=/app
 
 WORKDIR /app
 
-# Minimal runtime deps (curl for healthcheck)
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# Optional browser runtime (if absolutely required at runtime)
-RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends chromium chromium-driver && \
-      rm -rf /var/lib/apt/lists/* ; \
+# System deps (kept minimal). Added libnss3 for Chrome stability when INSTALL_BROWSER=true
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ curl wget gnupg ca-certificates libnss3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# If you need browser for Selenium, enable at build: --build-arg INSTALL_BROWSER=true
+# This installs Chromium and chromedriver on Debian-based slim images (may be adjusted per base image)
+RUN if [ "$INSTALL_BROWSER" = "true" ] ; then \
+      apt-get update && apt-get install -y chromium chromium-driver && rm -rf /var/lib/apt/lists/* ; \
     fi
 
-# Copy virtualenv from builder
-COPY --from=builder /venv /venv
-# Copy model cache (sentence-transformers) if preloaded
-COPY --from=builder /root/.cache /root/.cache
+# Copy requirements for caching
+COPY requirements.txt /app/requirements.txt
 
-# Copy application code
+# Force compatible numpy (<2.0) first to avoid incompatible wheels being pulled
+RUN pip install --no-cache-dir "numpy<2.0.0"
+
+# Install torch CPU wheel (recommended to pin CPU wheel appropriate to your target):
+# Example (adjust version/platform as needed) — comment out if you're not using sentence-transformers with torch
+RUN if [ "$INSTALL_TORCH" = "true" ] ; then \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch==2.2.2+cpu" ; \
+    fi
+
+# Install remaining Python deps (retry friendly)
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+ || pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy only runtime code (keep out secrets)
+# - app/: Python application package
 COPY app/ /app/app
 
-# Non-root user
-RUN useradd --create-home --shell /bin/bash appuser && chown -R appuser:appuser /app /root/.cache || true
+# Ensure app path is on PYTHONPATH (already set earlier by ENV consolidation)
+ENV PYTHONPATH=/app
+
+# Optional: preload sentence-transformer models (can be skipped with BUILD_ARG PRELOAD_MODELS=false)
+ARG PRELOAD_MODELS=true
+RUN if [ "$PRELOAD_MODELS" = "true" ]; then \
+    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('all-MiniLM-L6-v2'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2'); print('Models preloaded')" || echo 'Model preload skipped'; \
+    fi
+
+# Create non-root user and set ownership
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
 USER appuser
 
+# Expose port and healthcheck
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
-LABEL org.opencontainers.image.title="Alloha Backend" \
-      org.opencontainers.image.source="https://example.com/repo" \
-      org.opencontainers.image.description="AI Real Estate Chat (Supabase + RAG)" \
-      org.opencontainers.image.licenses="Proprietary"
-
-# Default command (single worker) - override with UVICORN_WORKERS env if desired in entrypoint
+# Run the application
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
