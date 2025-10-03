@@ -52,6 +52,8 @@ class IntelligentRealEstateBot:
         # flags controláveis via env para evitar 400s da Cloud API
         self.whatsapp_supports_typing = False
         self.whatsapp_supports_presence = False
+        # Flag para evitar spam de warnings de funcionalidades ainda não migradas
+        self._embedding_meta_warning_emitted = False
         logger.info("Bot de Inteligência Imobiliária iniciado")
 
     async def get_conversation_history(self, user_phone, limit=10) -> List[Dict[str, str]]:
@@ -675,13 +677,25 @@ class IntelligentRealEstateBot:
     async def _save_embedding_meta(self, doc_id: str, vector_id: str, model: str, meta: dict | None = None):
         """
         Salva metadados de embeddings (vetores são guardados no vector DB).
-        TODO: Migrar para Supabase (tabela embedding_metadata)
         """
         try:
-            logger.warning("⚠️ _save_embedding_meta ainda não migrado para Supabase - funcionalidade desabilitada temporariamente")
-            return
-            # TODO: Implementar usando supabase_client
-            # ...
+            # Lazy init client se ainda não disponível
+            client = supabase_client.ensure_client()
+            if not client:
+                logger.debug("Supabase indisponível; adiando persistência de embedding meta para doc_id=%s", doc_id)
+                return
+
+            ok = await asyncio.to_thread(
+                supabase_client.save_embedding_metadata,
+                doc_id,
+                vector_id,
+                model,
+                meta or {}
+            )
+            if ok:
+                logger.debug("Embedding meta salva (doc_id=%s vector_id=%s)", doc_id, vector_id)
+            else:
+                logger.warning("Falha ao salvar embedding meta (doc_id=%s vector_id=%s)", doc_id, vector_id)
         except Exception as e:
             logger.debug(f"Erro salvar embedding meta: {e}")
 

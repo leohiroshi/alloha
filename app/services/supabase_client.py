@@ -602,6 +602,44 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"❌ Erro ao cachear embedding: {e}")
             return False
+
+    # ================================================================
+    # EMBEDDING METADATA (para rastrear vetores gerados externamente)
+    # ================================================================
+
+    def save_embedding_metadata(
+        self,
+        doc_id: str,
+        vector_id: str,
+        model: str,
+        meta: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Persiste metadados sobre embeddings gerados.
+
+        Espera existir uma tabela embedding_metadata com colunas sugeridas:
+            id uuid (default gen_random_uuid()) primary key
+            doc_id text
+            vector_id text
+            model text
+            meta jsonb
+            created_at timestamptz default now()
+            UNIQUE(vector_id)
+        """
+        try:
+            data = {
+                'doc_id': doc_id,
+                'vector_id': vector_id,
+                'model': model,
+                'meta': meta or {},
+                'created_at': datetime.utcnow().isoformat()
+            }
+            self.client.table('embedding_metadata')\
+                .upsert(data, on_conflict='vector_id')\
+                .execute()
+            return True
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar embedding_metadata: {e}")
+            return False
     
     # ================================================================
     # URGENCY ALERTS
@@ -702,3 +740,19 @@ class SupabaseClient:
 
 # Singleton instance
 supabase_client = SupabaseClient()
+
+# -------------------------------------------------------------------
+# SUGESTÃO DE SCHEMA (executar manualmente no Supabase) para embedding_metadata:
+#
+# CREATE TABLE IF NOT EXISTS embedding_metadata (
+#   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+#   doc_id text,
+#   vector_id text UNIQUE,
+#   model text NOT NULL,
+#   meta jsonb DEFAULT '{}'::jsonb,
+#   created_at timestamptz DEFAULT now()
+# );
+#
+# CREATE INDEX IF NOT EXISTS idx_embedding_metadata_doc_id ON embedding_metadata(doc_id);
+# CREATE INDEX IF NOT EXISTS idx_embedding_metadata_model ON embedding_metadata(model);
+# -------------------------------------------------------------------
