@@ -1,36 +1,30 @@
-# rag_pipeline.py
+# rag_pipeline.py - 100% Supabase (pgvector)
+"""
+RAG Pipeline usando APENAS Supabase com pgvector
+"""
+
 import os
-import json
 import logging
-import asyncio
 import time
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from dataclasses import dataclass
 from datetime import datetime
-import hashlib
 import re
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from google.cloud import firestore
 from sentence_transformers import SentenceTransformer, CrossEncoder
-import chromadb
-from chromadb.config import Settings
-from tqdm import tqdm
 import openai
 from tenacity import retry, stop_after_attempt, wait_exponential
 import tiktoken
 
+# Import Supabase
+from app.services.supabase_client import supabase_client
+from app.services.session_cache import session_cache
+
 # ---------- CONFIG ----------
-FIRESTORE_KEY = os.getenv("FIREBASE_CREDENTIALS")
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = FIRESTORE_KEY
-
-FIRESTORE_COLLECTION = "properties"
-CHROMA_DIR = "chroma_db"
-CHROMA_COLLECTION = "imoveis_sofia"
-
-# Embedding config - CONSISTENTE
+# Embedding config
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 USE_OPENAI_EMBEDDINGS = os.getenv("USE_OPENAI_EMBEDDINGS", "1") == "1"
@@ -39,12 +33,10 @@ USE_OPENAI_EMBEDDINGS = os.getenv("USE_OPENAI_EMBEDDINGS", "1") == "1"
 TOP_K = 10
 RERANK_TOP_K = 5
 MAX_CONTEXT_TOKENS = 3000
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 50
 
 # OpenAI config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_CHAT_MODEL = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = 30
 
@@ -58,21 +50,20 @@ class RetrievalResult:
     score: float
     rerank_score: Optional[float] = None
 
+
 class RAGPipeline:
+    """RAG Pipeline usando Supabase pgvector"""
+    
     def __init__(self):
         self.system_prompt = """Você é Sofia, assistente virtual da Allega Imóveis em Curitiba/PR. 
-                            Persona: amigável, prestativa, especialista em mercado imobiliário de Curitiba. 
-                            Estilo: concisa (3-4 linhas), oferece próximos passos (visita, contato, WhatsApp). 
-                            Instruções: apresente-se na primeira interação, qualifique leads (orçamento, preferências, prazo), seja empática com objeções de preço e sugira alternativas se necessário."""
+Persona: amigável, prestativa, especialista em mercado imobiliário de Curitiba. 
+Estilo: concisa (3-4 linhas), oferece próximos passos (visita, contato, WhatsApp). 
+Instruções: apresente-se na primeira interação, qualifique leads (orçamento, preferências, prazo), seja empática com objeções de preço e sugira alternativas se necessário."""
         
         self.logger = self._setup_logging()
         self.embed_model = SentenceTransformer(EMBED_MODEL_NAME)
         self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-        self.tokenizer = tiktoken.encoding_for_model("gpt-4.1-mini")
-        
-        # ChromaDB setup
-        self.client = chromadb.PersistentClient(path=CHROMA_DIR)
-        self.collection = self._get_or_create_collection()
+        self.tokenizer = tiktoken.encoding_for_model("gpt-4o-mini")
         
         # OpenAI setup
         if OPENAI_API_KEY:
@@ -83,7 +74,7 @@ class RAGPipeline:
         else:
             self.openai_client = None
             self.logger.warning("OpenAI API key not found - using local embeddings only")
-
+    
     def _setup_logging(self) -> logging.Logger:
         logging.basicConfig(
             level=logging.INFO,
@@ -94,253 +85,55 @@ class RAGPipeline:
             ]
         )
         return logging.getLogger(__name__)
-
-    def _get_or_create_collection(self):
-        """Get or create ChromaDB collection with proper metadata"""
-        try:
-            collection = self.client.get_collection(CHROMA_COLLECTION)
-            self.logger.info(f"Loaded existing collection: {CHROMA_COLLECTION}")
-        except:
-            collection = self.client.create_collection(
-                CHROMA_COLLECTION, 
-                metadata={
-                    "purpose": "imoveis",
-                    "embedding_model": OPENAI_EMBEDDING_MODEL if USE_OPENAI_EMBEDDINGS else EMBED_MODEL_NAME,
-                    "created_at": datetime.now().isoformat()
-                }
-            )
-            self.logger.info(f"Created new collection: {CHROMA_COLLECTION}")
-        return collection
-
+    
     def _sanitize_text(self, text: str) -> str:
-        """Sanitize and normalize text"""
+        """Clean and normalize text"""
         if not text:
             return ""
-        
-        # Remove excessive whitespace
-        text = re.sub(r'\s+', ' ', text.strip())
-        
-        # Normalize price formats
-        text = re.sub(r'R\$\s*(\d+)\.(\d+)', r'R$ \1\2', text)
-        
-        # Remove potential prompt injection patterns
-        dangerous_patterns = [
-            r'ignore\s+previous\s+instructions',
-            r'system\s*:',
-            r'assistant\s*:',
-            r'user\s*:',
-        ]
-        
-        for pattern in dangerous_patterns:
-            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-        
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
         return text
-
-    def _chunk_text(self, text: str, doc_id: str) -> List[Tuple[str, Dict]]:
-        """Split long text into chunks"""
-        tokens = self.tokenizer.encode(text)
-        
-        if len(tokens) <= CHUNK_SIZE:
-            return [(text, {"chunk_id": f"{doc_id}_0", "chunk_index": 0})]
-        
-        chunks = []
-        for i in range(0, len(tokens), CHUNK_SIZE - CHUNK_OVERLAP):
-            chunk_tokens = tokens[i:i + CHUNK_SIZE]
-            chunk_text = self.tokenizer.decode(chunk_tokens)
-            chunk_meta = {
-                "chunk_id": f"{doc_id}_{i//CHUNK_SIZE}",
-                "chunk_index": i//CHUNK_SIZE
-            }
-            chunks.append((chunk_text, chunk_meta))
-        
-        return chunks
-
-    @retry(stop=stop_after_attempt(MAX_RETRIES), wait=wait_exponential(multiplier=1, min=4, max=10))
-    async def _get_openai_embedding_async(self, texts: List[str]) -> List[List[float]]:
-        """Get OpenAI embeddings with retry logic"""
-        if not self.openai_client:
-            raise RuntimeError("OpenAI client not initialized")
-        
-        try:
-            response = self.openai_client.embeddings.create(
-                model=OPENAI_EMBEDDING_MODEL,
-                input=texts
-            )
-            return [item.embedding for item in response.data]
-        except Exception as e:
-            self.logger.error(f"OpenAI embedding error: {e}")
-            raise
-
-    def _get_local_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Get local embeddings"""
-        return [self.embed_model.encode(text).tolist() for text in texts]
-
+    
     async def _encode_texts(self, texts: List[str]) -> List[List[float]]:
-        """Encode texts using configured embedding method"""
+        """Generate embeddings using OpenAI or local model"""
         if USE_OPENAI_EMBEDDINGS and self.openai_client:
-            return await self._get_openai_embedding_async(texts)
-        else:
-            return self._get_local_embeddings(texts)
-
-    def fetch_from_firestore(self, limit: Optional[int] = None) -> List[Dict]:
-        """Fetch documents from Firestore with error handling"""
-        try:
-            db = firestore.Client()
-            query = db.collection(FIRESTORE_COLLECTION)
-            
-            if limit:
-                query = query.limit(limit)
-            
-            docs = query.stream()
-            items = []
-            
-            for doc in docs:
-                try:
-                    data = doc.to_dict()
-                    data["_id"] = doc.id
-                    items.append(data)
-                except Exception as e:
-                    self.logger.error(f"Error processing document {doc.id}: {e}")
-                    continue
-            
-            self.logger.info(f"Fetched {len(items)} documents from Firestore")
-            return items
-            
-        except Exception as e:
-            self.logger.error(f"Error fetching from Firestore: {e}")
-            return []
-
-    def doc_to_text(self, doc: Dict) -> str:
-        """Convert document to searchable text"""
-        parts = []
-        
-        # Core content
-        if doc.get("title"):
-            parts.append(f"Título: {doc['title']}")
-        if doc.get("description"):
-            parts.append(f"Descrição: {doc['description']}")
-        
-        # Location
-        if doc.get("neighborhood"):
-            parts.append(f"Bairro: {doc['neighborhood']}")
-        if doc.get("city"):
-            parts.append(f"Cidade: {doc['city']}")
-        
-        # Property details
-        if doc.get("bedrooms"):
-            parts.append(f"Quartos: {doc['bedrooms']}")
-        if doc.get("bathrooms"):
-            parts.append(f"Banheiros: {doc['bathrooms']}")
-        if doc.get("area"):
-            parts.append(f"Área: {doc['area']} m²")
-        if doc.get("price"):
-            parts.append(f"Preço: R$ {doc['price']}")
-        
-        text = "\n".join(parts)
-        return self._sanitize_text(text)
-
-    async def build_or_update_index(self, limit: Optional[int] = None, batch_size: int = 50):
-        """Build or update the search index with batching"""
-        start_time = time.time()
-        
-        # Clear existing collection for consistency
-        try:
-            existing_ids = self.collection.get()['ids']
-            if existing_ids:
-                self.collection.delete(ids=existing_ids)
-                self.logger.info(f"Cleared {len(existing_ids)} existing documents")
-        except Exception as e:
-            self.logger.warning(f"Could not clear existing collection: {e}")
-
-        items = self.fetch_from_firestore(limit=limit)
-        if not items:
-            self.logger.warning("No documents to index")
-            return
-
-        all_ids, all_docs, all_metas, all_embeddings = [], [], [], []
-        
-        # Process documents in batches
-        for i in range(0, len(items), batch_size):
-            batch = items[i:i + batch_size]
-            batch_texts = []
-            batch_data = []
-            
-            for doc in batch:
-                try:
-                    text = self.doc_to_text(doc)
-                    if not text.strip():
-                        continue
-                    
-                    # Create chunks for long documents
-                    chunks = self._chunk_text(text, doc["_id"])
-                    
-                    for chunk_text, chunk_meta in chunks:
-                        batch_texts.append(chunk_text)
-                        
-                        # Prepare metadata
-                        metadata = {
-                            "original_id": doc["_id"],
-                            "neighborhood": doc.get("neighborhood", ""),
-                            "city": doc.get("city", ""),
-                            "price": doc.get("price"),
-                            "bedrooms": doc.get("bedrooms"),
-                            "status": doc.get("status", "disponivel"),
-                            "url": doc.get("url", ""),
-                            "main_image": doc.get("main_image", ""),
-                            "source": "firestore",
-                            "indexed_at": datetime.now().isoformat(),
-                            **chunk_meta
-                        }
-                        
-                        batch_data.append({
-                            "id": chunk_meta["chunk_id"],
-                            "text": chunk_text,
-                            "metadata": metadata
-                        })
-                        
-                except Exception as e:
-                    self.logger.error(f"Error processing document {doc.get('_id', 'unknown')}: {e}")
-                    continue
-            
-            if not batch_texts:
-                continue
-            
-            # Get embeddings for batch
             try:
-                embeddings = await self._encode_texts(batch_texts)
-                
-                # Prepare data for ChromaDB
-                for data, embedding in zip(batch_data, embeddings):
-                    all_ids.append(data["id"])
-                    all_docs.append(data["text"])
-                    all_metas.append(data["metadata"])
-                    all_embeddings.append(embedding)
-                
-                self.logger.info(f"Processed batch {i//batch_size + 1}/{(len(items) + batch_size - 1)//batch_size}")
-                
-            except Exception as e:
-                self.logger.error(f"Error processing batch {i//batch_size + 1}: {e}")
-                continue
-
-        # Insert all data
-        if all_ids:
-            try:
-                self.collection.add(
-                    documents=all_docs,
-                    metadatas=all_metas,
-                    ids=all_ids,
-                    embeddings=all_embeddings
+                response = self.openai_client.embeddings.create(
+                    input=texts,
+                    model=OPENAI_EMBEDDING_MODEL
                 )
-                
-                elapsed = time.time() - start_time
-                self.logger.info(f"Index updated with {len(all_ids)} chunks from {len(items)} documents in {elapsed:.2f}s")
-                
+                return [item.embedding for item in response.data]
             except Exception as e:
-                self.logger.error(f"Error adding to ChromaDB: {e}")
-                raise
-
-    async def retrieve(self, query: str, top_k: int = TOP_K, filters: Optional[Dict] = None) -> List[RetrievalResult]:
-        """Retrieve relevant documents with reranking"""
+                self.logger.warning(f"OpenAI embeddings failed, fallback to local: {e}")
+        
+        # Fallback to local embeddings
+        return self.embed_model.encode(texts, convert_to_numpy=True, show_progress_bar=False).tolist()
+    
+    def _rerank_results(self, query: str, results: List[RetrievalResult]) -> List[RetrievalResult]:
+        """Rerank results using cross-encoder"""
+        if not results:
+            return results
+        
+        pairs = [[query, r.text] for r in results]
+        scores = self.reranker.predict(pairs)
+        
+        for result, score in zip(results, scores):
+            result.rerank_score = float(score)
+        
+        # Sort by rerank score
+        results.sort(key=lambda x: x.rerank_score or 0, reverse=True)
+        return results
+    
+    async def retrieve(
+        self, 
+        query: str, 
+        top_k: int = TOP_K, 
+        filters: Optional[Dict] = None, 
+        phone_hash: Optional[str] = None
+    ) -> List[RetrievalResult]:
+        """
+        Retrieve relevant documents using Supabase pgvector with session cache
+        """
         start_time = time.time()
         
         # Sanitize query
@@ -349,42 +142,50 @@ class RAGPipeline:
             return []
         
         try:
-            # Get query embedding
+            # Get shown properties from cache (if phone_hash provided)
+            shown_property_ids = []
+            if phone_hash:
+                shown_property_ids = session_cache.get_shown_properties(phone_hash)
+                if shown_property_ids:
+                    self.logger.info(f"Cache: {len(shown_property_ids)} properties already shown to {phone_hash[:8]}...")
+            
+            # Generate query embedding
             query_embeddings = await self._encode_texts([clean_query])
             query_embedding = query_embeddings[0]
             
-            # Search ChromaDB
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k * 2,  # Get more for reranking
-                include=["documents", "metadatas", "distances"]
+            # Search using Supabase pgvector
+            search_limit = top_k * 3 if shown_property_ids else top_k * 2
+            
+            results = supabase_client.vector_search(
+                query_embedding=query_embedding,
+                limit=search_limit,
+                filters=filters
             )
             
             # Process results
-            documents = results.get("documents", [[]])[0]
-            metadatas = results.get("metadatas", [[]])[0]
-            distances = results.get("distances", [[]])[0]
-            
-            # Convert to RetrievalResult objects
             retrieval_results = []
-            for i, (doc, meta, dist) in enumerate(zip(documents, metadatas, distances)):
-                # Apply filters if specified
-                if filters:
-                    skip = False
-                    for key, value in filters.items():
-                        if key in meta and str(meta[key]).lower() != str(value).lower():
-                            skip = True
-                            break
-                    if skip:
-                        continue
+            new_property_ids = []
+            
+            for result in results:
+                property_id = result.get("property_id")
                 
-                result = RetrievalResult(
-                    id=meta.get("chunk_id", f"unknown_{i}"),
-                    text=doc,
-                    metadata=meta,
-                    score=1.0 - dist  # Convert distance to similarity
+                # Skip if already shown to this user (SESSION CACHE FILTER)
+                if phone_hash and property_id and property_id in shown_property_ids:
+                    self.logger.debug(f"Skipping property {property_id} - already shown")
+                    continue
+                
+                # Create retrieval result
+                retrieval_result = RetrievalResult(
+                    id=result.get("id", "unknown"),
+                    text=result.get("content", ""),
+                    metadata=result.get("metadata", {}),
+                    score=1.0 - result.get("distance", 1.0)  # Convert distance to similarity
                 )
-                retrieval_results.append(result)
+                retrieval_results.append(retrieval_result)
+                
+                # Track property ID for cache update
+                if property_id:
+                    new_property_ids.append(property_id)
             
             # Rerank results
             if len(retrieval_results) > RERANK_TOP_K:
@@ -393,68 +194,52 @@ class RAGPipeline:
             else:
                 final_results = retrieval_results[:RERANK_TOP_K]
             
+            # Update session cache with new properties shown
+            if phone_hash and new_property_ids:
+                final_property_ids = []
+                for result in final_results:
+                    prop_id = result.metadata.get("property_id")
+                    if prop_id:
+                        final_property_ids.append(prop_id)
+                
+                if final_property_ids:
+                    session_cache.add_shown_properties(phone_hash, final_property_ids)
+                    self.logger.info(f"Cache updated: +{len(final_property_ids)} properties for {phone_hash[:8]}...")
+            
             elapsed = time.time() - start_time
-            self.logger.info(f"Retrieved {len(final_results)} results in {elapsed:.2f}s")
+            self.logger.info(f"Retrieved {len(final_results)} results in {elapsed:.2f}s (cache-filtered: {len(shown_property_ids)})")
             
             return final_results
-            
+        
         except Exception as e:
             self.logger.error(f"Error in retrieve: {e}")
             return []
-
-    def _rerank_results(self, query: str, results: List[RetrievalResult]) -> List[RetrievalResult]:
-        """Rerank results using cross-encoder"""
-        try:
-            pairs = [(query, result.text) for result in results]
-            scores = self.reranker.predict(pairs)
-            
-            for result, score in zip(results, scores):
-                result.rerank_score = float(score)
-            
-            # Sort by rerank score
-            results.sort(key=lambda x: x.rerank_score or 0, reverse=True)
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"Error in reranking: {e}")
-            return results
-
-    def build_prompt(self, question: str, retrieved: List[RetrievalResult]) -> str:
-        """Build RAG prompt with token limit"""
-
-        context_blocks = []
-        total_tokens = len(self.tokenizer.encode(self.system_prompt + question))
+    
+    def build_prompt(self, question: str, context_docs: List[RetrievalResult]) -> str:
+        """Build prompt from question and retrieved documents"""
+        # Build context from documents
+        context_parts = []
+        for i, doc in enumerate(context_docs, 1):
+            context_parts.append(f"[Doc {i}]\n{doc.text}\n")
         
-        for result in retrieved:
-            meta = result.metadata
-            
-            # Build context block
-            block = f"""Imóvel ID: {meta.get('original_id', 'N/A')}
-                    {result.text}
-                    🔗 URL: {meta.get('url', 'N/A')}
-                    🖼️ Imagem: {meta.get('main_image', 'N/A')}
-                    Relevância: {result.rerank_score or result.score:.3f}"""
-            
-            block_tokens = len(self.tokenizer.encode(block))
-            
-            if total_tokens + block_tokens > MAX_CONTEXT_TOKENS:
-                break
-                
-            context_blocks.append(block)
-            total_tokens += block_tokens
+        context = "\n".join(context_parts)
         
-        context = "\n\n---\n\n".join(context_blocks) if context_blocks else "Nenhuma informação encontrada."
+        # Truncate if too long
+        context_tokens = len(self.tokenizer.encode(context))
+        if context_tokens > MAX_CONTEXT_TOKENS:
+            # Trim context
+            context = context[:MAX_CONTEXT_TOKENS * 4]  # Rough estimate
         
-        return f"""{self.system_prompt}
-        
-        CONTEXTO:
-        {context}
+        return f"""Baseando-se APENAS nas informações do contexto abaixo, responda a pergunta do usuário de forma natural e concisa.
 
-        PERGUNTA: {question}"""
+CONTEXTO:
+{context}
 
+PERGUNTA: {question}"""
+    
     @retry(stop=stop_after_attempt(MAX_RETRIES), wait=wait_exponential(multiplier=1, min=4, max=10))
     def call_gpt(self, prompt: str, model_name: Optional[str] = None, temperature: float = 0.1) -> str:
-        """Call OpenAI with retry logic and proper error handling"""
+        """Call OpenAI with retry logic"""
         if not self.openai_client:
             return "Desculpe, o serviço de chat não está disponível no momento."
         
@@ -482,18 +267,25 @@ class RAGPipeline:
             else:
                 self.logger.warning("Empty response from OpenAI")
                 return "Desculpe, não consegui gerar uma resposta adequada."
-                
+        
         except Exception as e:
             self.logger.error(f"OpenAI API error: {e}")
             raise
-
-    async def query(self, question: str, filters: Optional[Dict] = None) -> str:
-        """Main query method - combines retrieval and generation"""
+    
+    async def query(
+        self, 
+        question: str, 
+        filters: Optional[Dict] = None, 
+        phone_hash: Optional[str] = None
+    ) -> str:
+        """
+        Main query method - combines retrieval and generation with session cache
+        """
         try:
             start_time = time.time()
             
-            # Retrieve relevant documents
-            retrieved = await self.retrieve(question, filters=filters)
+            # Retrieve relevant documents (with cache filtering)
+            retrieved = await self.retrieve(question, filters=filters, phone_hash=phone_hash)
             
             if not retrieved:
                 return "Desculpe, não encontrei informações relevantes para sua pergunta. Pode reformular ou ser mais específico?"
@@ -508,38 +300,15 @@ class RAGPipeline:
             self.logger.info(f"Query completed in {elapsed:.2f}s")
             
             return response
-            
+        
         except Exception as e:
             self.logger.error(f"Error in query: {e}")
             return "Desculpe, ocorreu um erro ao processar sua pergunta. Tente novamente."
 
+
 # Global instance
 rag = RAGPipeline()
 
-# Convenience functions for backward compatibility
-async def build_or_update_index(limit=None):
-    await rag.build_or_update_index(limit=limit)
-
-async def query_rag(question: str, filters: Optional[Dict] = None) -> str:
-    return await rag.query(question, filters=filters)
-
-# EXEMPLO DE USO
-if __name__ == "__main__":
-    async def main():
-        # Build index
-        await rag.build_or_update_index(limit=100)  # Test with 100 docs first
-        
-        # Test queries
-        test_queries = [
-            "Procuro um apartamento de 2 quartos no Água Verde até 400000",
-            "Tem alguma casa com piscina?",
-            "Quais imóveis disponíveis no Centro?"
-        ]
-        
-        for query in test_queries:
-            print(f"\n🔍 PERGUNTA: {query}")
-            response = await rag.query(query)
-            print(f"📝 RESPOSTA: {response}")
-            print("-" * 80)
-
-    asyncio.run(main())
+# Convenience functions
+async def query_rag(question: str, filters: Optional[Dict] = None, phone_hash: Optional[str] = None) -> str:
+    return await rag.query(question, filters=filters, phone_hash=phone_hash)

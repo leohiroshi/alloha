@@ -1,7 +1,6 @@
 -- ====================================================================
 -- ALLOHA - SUPABASE SCHEMA
 -- PostgreSQL 15 + pgvector + pg_cron
--- Migration from Firebase Firestore
 -- ====================================================================
 
 -- Enable required extensions

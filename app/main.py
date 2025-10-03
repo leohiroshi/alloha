@@ -17,9 +17,10 @@ from app.services.dataset_living_loop import dataset_living_loop
 from app.services.dual_stack_intelligence import dual_stack_intelligence
 from app.services.urgency_score_system import urgency_score_system
 from app.services.autonomous_followup import autonomous_followup
-from app.services.voice_ptt_system import voice_ptt_system
 from app.services.live_pricing_system import live_pricing_system
 from app.services.white_label_system import white_label_system
+from app.services.supabase_client import supabase_client
+from app.services.webhook_idempotency import webhook_idempotency
 import asyncio
 
 # Configurar logging
@@ -65,25 +66,38 @@ async def startup_event():
         asyncio.create_task(live_pricing_system.start_live_sync_loop())
         logger.info("✅ Live pricing system iniciado")
         
-        # Limpeza de cache de voz a cada hora
-        async def cleanup_voice_cache():
-            while True:
-                await asyncio.sleep(3600)  # 1 hora
-                await voice_ptt_system.cleanup_old_cache()
-        
-        asyncio.create_task(cleanup_voice_cache())
-        
-        # Inicializar Google Calendar para agendamentos autônomos
-        calendar_initialized = await autonomous_followup.initialize_calendar_service()
-        if calendar_initialized:
-            logger.info("✅ Google Calendar inicializado para agendamentos autônomos")
+        # Inicializar sistema de voz (opcional)
+        enable_voice = os.getenv('ENABLE_VOICE_PTT', 'false').lower() in ('1','true','yes','on')
+        if enable_voice:
+            from app.services.voice_ptt_system import voice_ptt_system  # lazy import
+
+            # Limpeza de cache de voz a cada hora
+            async def cleanup_voice_cache():
+                while True:
+                    await asyncio.sleep(3600)  # 1 hora
+                    await voice_ptt_system.cleanup_old_cache()
+            asyncio.create_task(cleanup_voice_cache())
+            logger.info("✅ Voice PTT system habilitado")
         else:
-            logger.warning("⚠️ Google Calendar não configurado - agendamentos em modo fallback")
+            logger.info("ℹ️ Voice PTT desativado (ENABLE_VOICE_PTT=false)")
+        
+        # Inicializar Google Calendar (v1 desativado por padrão)
+        if os.getenv('ENABLE_GOOGLE_CALENDAR', 'false').lower() in ('1','true','yes','on'):
+            calendar_initialized = await autonomous_followup.initialize_calendar_service()
+            if calendar_initialized:
+                logger.info("✅ Google Calendar inicializado para agendamentos autônomos")
+            else:
+                logger.warning("⚠️ Google Calendar não configurado ou indisponível - fallback ativo")
+        else:
+            logger.info("ℹ️ Google Calendar desativado (ENABLE_GOOGLE_CALENDAR=false) - usando fallback de agendamento")
         
         # Monitor de scraping
         asyncio.create_task(monitor_scraper())
         logger.info("✅ Property monitor iniciado")
-        
+
+        # Iniciar idempotency cleanup task de forma segura
+        webhook_idempotency.start()
+
     except Exception as e:
         logger.error(f"❌ Erro na inicialização: {e}")
     
@@ -97,7 +111,7 @@ async def root():
             "Intelligent property search",
             "Market insights", 
             "AI-powered conversations",
-            "Firebase integration",
+            "Supabase integration",
             "Real estate data scraping",
             "Image analysis with GPT-5 mini",
             "Property availability verification"
@@ -126,7 +140,7 @@ async def health():
                 "property_search": True,
                 "market_insights": True,
                 "conversation_memory": True,
-                "firebase_integration": True,
+                "supabase_integration": True,
                 "image_analysis": True,
                 "availability_check": True
             }
@@ -427,9 +441,9 @@ async def send_image_error_response(from_number: str):
 async def get_user_analytics(user_phone: str):
     """Obter analytics de um usuário específico"""
     try:
-        # Obter dados do Firebase
-        user_profile = await intelligent_bot.firebase_service.get_user_profile(user_phone)
-        user_stats = await intelligent_bot.firebase_service.get_user_stats(user_phone)
+        # Obter dados do Supabase
+        user_profile = await asyncio.to_thread(supabase_client.get_user_profile, user_phone)
+        user_stats = await asyncio.to_thread(supabase_client.get_user_stats, user_phone)
         
         return {
             "user_phone": user_phone,
@@ -577,7 +591,7 @@ async def get_system_status():
             "detailed_status": status_info,
             "components": {
                 "whatsapp_service": bool(ACCESS_TOKEN and PHONE_NUMBER_ID),
-                "firebase_service": bool(intelligent_bot.firebase_service),
+                "supabase_client": True,
                 "property_intelligence": bool(intelligent_bot.property_intelligence),
                 "intelligent_bot": True,
                 "sofia_vision": True,  # Análise de imagens integrada
@@ -650,7 +664,7 @@ async def expand_dataset_now():
         
         # Buscar conversas dos últimos 7 dias
         since = datetime.utcnow() - timedelta(days=7)
-        examples = await dataset_expander.expand_from_firebase(limit=100)
+        examples = await dataset_expander.expand_from_supabase(limit=100)
         
         if not examples:
             return {
@@ -837,10 +851,21 @@ async def create_white_label_site(
 async def get_dashboard_stats():
     """Estatísticas completas do dashboard"""
     try:
+        # Voice stats condicionais
+        voice_stats = None
+        if os.getenv('ENABLE_VOICE_PTT', 'false').lower() in ('1','true','yes','on'):
+            try:
+                from app.services.voice_ptt_system import voice_ptt_system  # lazy import
+                voice_stats = voice_ptt_system.get_voice_stats()
+            except Exception as e:
+                voice_stats = {"enabled": False, "error": str(e)}
+        else:
+            voice_stats = {"enabled": False}
+
         stats = {
             "dual_stack": dual_stack_intelligence.get_cache_stats(),
             "urgency_system": urgency_score_system.get_urgency_stats(),
-            "voice_ptt": voice_ptt_system.get_voice_stats(),
+            "voice_ptt": voice_stats,
             "live_pricing": await live_pricing_system.get_pricing_stats(),
             "white_label": white_label_system.get_deployment_stats(),
             "timestamp": datetime.utcnow().isoformat()

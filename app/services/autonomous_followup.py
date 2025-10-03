@@ -9,13 +9,20 @@ from datetime import datetime, timedelta
 import json
 import os
 
-# Google Calendar API
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
+# Google Calendar API (opcional). Se não instalado, sistema entra em modo fallback.
+try:
+    from google.oauth2.credentials import Credentials  # type: ignore
+    from google.auth.transport.requests import Request  # type: ignore
+    from google_auth_oauthlib.flow import Flow  # type: ignore
+    from googleapiclient.discovery import build  # type: ignore
+    _GOOGLE_CALENDAR_AVAILABLE = True
+except ImportError:
+    _GOOGLE_CALENDAR_AVAILABLE = False
+    Credentials = None  # type: ignore
+    Flow = None  # type: ignore
+    build = None  # type: ignore
 
-from app.services.firebase_service import firebase_service
+from app.services.supabase_client import supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +65,12 @@ class AutonomousFollowUp:
     async def initialize_calendar_service(self):
         """Inicializa serviço do Google Calendar"""
         
+        if os.getenv('ENABLE_GOOGLE_CALENDAR', 'false').lower() not in ('1','true','yes','on'):
+            logger.info("Google Calendar desativado por configuração (ENABLE_GOOGLE_CALENDAR)")
+            return False
+        if not _GOOGLE_CALENDAR_AVAILABLE:
+            logger.warning("Google Calendar libs não instaladas - fallback ativo")
+            return False
         try:
             # Credenciais OAuth2
             creds = None
@@ -104,7 +117,8 @@ class AutonomousFollowUp:
         try:
             # Inicializar Calendar se necessário
             if not self.calendar_service:
-                if not await self.initialize_calendar_service():
+                init_ok = await self.initialize_calendar_service()
+                if not init_ok:
                     return await self._fallback_scheduling(phone, client_name)
             
             # Template baseado na urgência
@@ -130,7 +144,7 @@ class AutonomousFollowUp:
                 property_interests
             )
             
-            # Salvar no Firebase
+            # Persistir no Supabase
             await self._save_scheduled_visit(phone, event_data, urgency_score)
             
             # Gerar resposta WhatsApp
@@ -372,30 +386,27 @@ class AutonomousFollowUp:
                                   phone: str,
                                   event_data: Dict,
                                   urgency_score: int):
-        """Salva visita agendada no Firebase"""
-        
+        """Salva visita agendada no Supabase (tabela scheduled_visits)"""
         try:
             visit_data = {
-                "phone": phone,
-                "event_id": event_data["event_id"],
-                "scheduled_at": event_data["start_time"],
-                "calendar_link": event_data["calendar_link"],
-                "meet_link": event_data.get("meet_link", ""),
-                "urgency_score": urgency_score,
-                "status": "scheduled",  # scheduled, confirmed, completed, cancelled
-                "created_at": datetime.utcnow(),
-                "created_by": "sofia_autonomous",
-                "confirmation_sent": False,
-                "reminder_sent": False
+                'phone_number': phone,
+                'event_id': event_data['event_id'],
+                'scheduled_at': event_data['start_time'].isoformat(),
+                'duration_minutes': (event_data['end_time'] - event_data['start_time']).seconds // 60,
+                'calendar_link': event_data['calendar_link'],
+                'meet_link': event_data.get('meet_link', ''),
+                'urgency_level': urgency_score,
+                'status': 'scheduled',
+                'confirmation_sent_at': None,
+                'reminder_sent_at': None,
+                'notes': json.dumps({'auto': True}),
+                'created_at': datetime.utcnow().isoformat(),
+                'updated_at': datetime.utcnow().isoformat()
             }
-            
-            # Salvar na coleção scheduled_visits
-            await firebase_service.db.collection('scheduled_visits').add(visit_data)
-            
-            logger.info(f"Visita salva no Firebase: {phone} - {event_data['event_id']}")
-            
+            supabase_client.client.table('scheduled_visits').insert(visit_data).execute()
+            logger.info(f"Visita salva no Supabase: {phone} - {event_data['event_id']}")
         except Exception as e:
-            logger.error(f"Erro ao salvar visita agendada: {e}")
+            logger.error(f"Erro ao salvar visita agendada (Supabase): {e}")
     
     async def _fallback_scheduling(self, phone: str, client_name: str) -> Dict[str, Any]:
         """Fallback quando não consegue agendar automaticamente"""
@@ -446,34 +457,32 @@ class AutonomousFollowUp:
             # Buscar visitas agendadas para próximas 24h sem confirmação
             tomorrow = datetime.utcnow() + timedelta(days=1)
             
-            visits_ref = firebase_service.db.collection('scheduled_visits')
-            query = visits_ref.where('scheduled_at', '<=', tomorrow) \
-                             .where('status', '==', 'scheduled') \
-                             .where('confirmation_sent', '==', False)
-            
-            visits = query.stream()
-            
+            # Buscar visitas em janela até 24h que não tenham confirmação / lembrete
+            now_iso = datetime.utcnow().isoformat()
+            tomorrow_iso = tomorrow.isoformat()
+            result = supabase_client.client.table('scheduled_visits') \
+                .select('id, scheduled_at, calendar_link, confirmation_sent_at, status') \
+                .eq('status', 'scheduled') \
+                .gte('scheduled_at', now_iso) \
+                .lte('scheduled_at', tomorrow_iso) \
+                .is_('confirmation_sent_at', 'null') \
+                .execute()
+
+            visits = result.data or []
             reminders_sent = 0
-            for visit_doc in visits:
-                visit_data = visit_doc.to_dict()
-                
-                # Enviar lembrete
-                reminder_message = (
-                    f"🔔 Lembrete: Você tem uma visita agendada para "
-                    f"{self._format_datetime(visit_data['scheduled_at'])}. "
-                    f"Confirme sua presença respondendo 'SIM' ou reagende se necessário. "
-                    f"Link: {visit_data['calendar_link']}"
-                )
-                
-                # Marcar como enviado
-                await firebase_service.db.collection('scheduled_visits').document(visit_doc.id).update({
-                    'confirmation_sent': True,
-                    'reminder_sent_at': datetime.utcnow()
-                })
-                
-                reminders_sent += 1
-            
-            logger.info(f"Enviados {reminders_sent} lembretes de confirmação")
+            for visit in visits:
+                try:
+                    # (Envio real de mensagem ficaria em outro serviço)
+                    # Atualizar como confirmado envio de lembrete
+                    supabase_client.client.table('scheduled_visits') \
+                        .update({'confirmation_sent_at': datetime.utcnow().isoformat()}) \
+                        .eq('id', visit['id']) \
+                        .execute()
+                    reminders_sent += 1
+                except Exception as inner:
+                    logger.debug(f"Falha atualizar lembrete visita {visit.get('id')}: {inner}")
+
+            logger.info(f"Enviados {reminders_sent} lembretes de confirmação (Supabase)")
             return reminders_sent
             
         except Exception as e:
@@ -492,22 +501,16 @@ class AutonomousFollowUp:
             if not date_to:
                 date_to = date_from + timedelta(days=30)
             
-            visits_ref = firebase_service.db.collection('scheduled_visits')
-            query = visits_ref.where('scheduled_at', '>=', date_from) \
-                             .where('scheduled_at', '<=', date_to)
-            
+            from_iso = date_from.isoformat()
+            to_iso = date_to.isoformat()
+            query = supabase_client.client.table('scheduled_visits') \
+                .select('*') \
+                .gte('scheduled_at', from_iso) \
+                .lte('scheduled_at', to_iso)
             if status:
-                query = query.where('status', '==', status)
-            
-            query = query.order_by('scheduled_at')
-            
-            visits = []
-            for doc in query.stream():
-                visit_data = doc.to_dict()
-                visit_data['id'] = doc.id
-                visits.append(visit_data)
-            
-            return visits
+                query = query.eq('status', status)
+            result = query.order('scheduled_at').execute()
+            return result.data or []
             
         except Exception as e:
             logger.error(f"Erro ao recuperar visitas agendadas: {e}")

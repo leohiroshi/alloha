@@ -11,7 +11,7 @@ import json
 import aiohttp
 import os
 
-from app.services.firebase_service import firebase_service
+from app.services.supabase_client import supabase_client
 from app.services.rag_pipeline import rag
 
 logger = logging.getLogger(__name__)
@@ -386,121 +386,157 @@ class LivePricingSystem:
         return min(score / max_score, 1.0)
     
     async def _process_property_updates(self, properties: List[Dict], source: str) -> int:
-        """Processa atualizações de propriedades"""
-        
+        """Processa atualizações de propriedades salvando no Supabase e atualizando embeddings."""
+
         processed_count = 0
-        
+
         for prop in properties:
             try:
-                # Atualizar no Firebase
-                await self._update_property_in_firebase(prop)
-                
-                # Atualizar embeddings no RAG
-                await self._update_property_embeddings(prop)
-                
+                # Preparar dados para Supabase
+                supabase_prop = self._map_property_for_supabase(prop)
+
+                # Upsert (rodar em thread para não bloquear loop)
+                await asyncio.to_thread(supabase_client.upsert_property, supabase_prop)
+
+                # Atualizar embeddings/vetores para busca (RAG / property_embeddings)
+                await self._update_property_embeddings(supabase_prop)
+
                 processed_count += 1
-                
-                # Log de preços atualizados
-                if prop.get("price"):
+
+                if supabase_prop.get("price"):
                     self.sync_stats["price_updates"] += 1
-                
+
             except Exception as e:
                 logger.error(f"Erro ao processar propriedade {prop.get('external_id')}: {e}")
-        
-        logger.info(f"Processadas {processed_count} propriedades do {source}")
+
+        logger.info(f"Processadas {processed_count} propriedades do {source} (Supabase)")
         return processed_count
-    
-    async def _update_property_in_firebase(self, property_data: Dict):
-        """Atualiza propriedade no Firebase"""
-        
+
+    def _map_property_for_supabase(self, property_data: Dict) -> Dict[str, Any]:
+        """Mapeia payload normalizado para o esquema da tabela 'properties' no Supabase.
+
+        Suposições (ajustar se o schema divergir):
+        - Chave primária lógica: property_id (usar external_id)
+        - Campos principais: title, description, price, neighborhood, property_type, transaction_type, status, source
+        - Campos numéricos: bedrooms, bathrooms, parking_spaces, area_total, area_useful
+        """
+
         try:
-            # Usar external_id como chave
-            doc_ref = firebase_service.db.collection('properties').document(property_data["external_id"])
-            
-            # Adicionar timestamp de sincronização
-            property_data["synced_at"] = datetime.utcnow()
-            property_data["is_fresh"] = True
-            
-            # Upsert
-            await doc_ref.set(property_data, merge=True)
-            
+            mapped = {
+                'property_id': property_data.get('external_id'),
+                'external_id': property_data.get('external_id'),
+                'source': property_data.get('source'),
+                'title': property_data.get('title', ''),
+                'description': property_data.get('description', ''),
+                'price': property_data.get('price', 0),
+                'transaction_type': property_data.get('transaction_type'),
+                'property_type': property_data.get('property_type'),
+                'address': property_data.get('address'),
+                'neighborhood': property_data.get('neighborhood'),
+                'city': property_data.get('city'),
+                'state': property_data.get('state'),
+                'zipcode': property_data.get('zipcode'),
+                'bedrooms': property_data.get('bedrooms'),
+                'bathrooms': property_data.get('bathrooms'),
+                'parking_spaces': property_data.get('parking_spaces'),
+                'area_total': property_data.get('area_total'),
+                'area_useful': property_data.get('area_useful'),
+                'images': property_data.get('images', []),
+                'main_image': property_data.get('main_image'),
+                'status': property_data.get('status', 'active'),
+                'data_quality_score': property_data.get('data_quality_score'),
+                'url': property_data.get('url'),
+                'synced_at': datetime.utcnow().isoformat(),
+                'is_fresh': True,
+            }
+
+            # Garantir updated_at como string ISO
+            updated_at = property_data.get('updated_at')
+            if isinstance(updated_at, datetime):
+                mapped['updated_at'] = updated_at.isoformat()
+            else:
+                mapped['updated_at'] = (updated_at or datetime.utcnow()).isoformat()
+
+            return mapped
         except Exception as e:
-            logger.error(f"Erro ao salvar propriedade no Firebase: {e}")
+            logger.error(f"Falha ao mapear propriedade para Supabase: {e}")
+            return property_data
     
     async def _update_property_embeddings(self, property_data: Dict):
-        """Atualiza embeddings da propriedade no RAG"""
-        
+        """Atualiza vetor/embedding da propriedade em property_embeddings via RAG pipeline."""
+
         try:
-            # Construir texto para embedding
             text_parts = [
-                property_data.get("title", ""),
-                property_data.get("description", ""),
+                property_data.get('title', ''),
+                property_data.get('description', ''),
                 f"Bairro: {property_data.get('neighborhood', '')}",
                 f"Preço: R$ {property_data.get('price', 0):,.2f}",
                 f"Quartos: {property_data.get('bedrooms', 0)}",
                 f"Área: {property_data.get('area_total', 0)} m²"
             ]
-            
-            full_text = " ".join([part for part in text_parts if part])
-            
-            # Metadados
+            full_text = " ".join([p for p in text_parts if p])
+
             metadata = {
-                "external_id": property_data["external_id"],
-                "source": property_data["source"],
-                "price": property_data.get("price", 0),
-                "neighborhood": property_data.get("neighborhood", ""),
-                "property_type": property_data.get("property_type", ""),
-                "transaction_type": property_data.get("transaction_type", ""),
-                "updated_at": property_data["updated_at"],
-                "status": property_data["status"],
-                "url": property_data.get("url", ""),
-                "main_image": property_data.get("main_image", "")
+                'property_id': property_data.get('property_id'),
+                'external_id': property_data.get('external_id'),
+                'source': property_data.get('source'),
+                'price': property_data.get('price'),
+                'neighborhood': property_data.get('neighborhood'),
+                'property_type': property_data.get('property_type'),
+                'transaction_type': property_data.get('transaction_type'),
+                'updated_at': property_data.get('updated_at'),
+                'status': property_data.get('status'),
+                'url': property_data.get('url'),
+                'main_image': property_data.get('main_image'),
             }
-            
-            # Adicionar ao RAG
+
             await rag.add_document(
                 text=full_text,
                 metadata=metadata,
-                doc_id=property_data["external_id"]
+                doc_id=property_data.get('property_id')
             )
-            
         except Exception as e:
-            logger.error(f"Erro ao atualizar embeddings: {e}")
+            logger.error(f"Erro ao atualizar embeddings (Supabase): {e}")
     
     async def _remove_outdated_properties(self):
-        """Remove propriedades desatualizadas (> 6h)"""
-        
+        """Marca propriedades como inativas no Supabase quando ultrapassam janela de frescor."""
+
         try:
             cutoff_time = datetime.utcnow() - timedelta(hours=self.freshness_hours)
-            
-            # Buscar propriedades desatualizadas no Firebase
-            properties_ref = firebase_service.db.collection('properties')
-            query = properties_ref.where('updated_at', '<', cutoff_time) \
-                                 .where('status', '==', 'active')
-            
-            outdated_docs = query.stream()
+            cutoff_iso = cutoff_time.isoformat()
+
+            # Buscar propriedades ativas mais antigas que o cutoff
+            result = supabase_client.client.table('properties') \
+                .select('property_id, updated_at, status') \
+                .eq('status', 'active') \
+                .lt('updated_at', cutoff_iso) \
+                .execute()
+
+            outdated = result.data or []
             removed_count = 0
-            
-            for doc in outdated_docs:
-                # Marcar como inativo
-                await doc.reference.update({
-                    'status': 'inactive',
-                    'deactivated_at': datetime.utcnow(),
-                    'deactivation_reason': 'outdated_data'
-                })
-                
-                # Remover do RAG
-                await rag.remove_document(doc.id)
-                
-                removed_count += 1
-            
-            self.sync_stats["outdated_removed"] = removed_count
-            
-            if removed_count > 0:
-                logger.info(f"Removidas {removed_count} propriedades desatualizadas")
-            
+
+            for prop in outdated:
+                pid = prop.get('property_id')
+                try:
+                    supabase_client.client.table('properties') \
+                        .update({
+                            'status': 'inactive',
+                            'deactivated_at': datetime.utcnow().isoformat(),
+                            'deactivation_reason': 'outdated_data'
+                        }) \
+                        .eq('property_id', pid) \
+                        .execute()
+                    # Remover embedding
+                    await rag.remove_document(pid)
+                    removed_count += 1
+                except Exception as inner:
+                    logger.debug(f"Falha ao inativar {pid}: {inner}")
+
+            self.sync_stats['outdated_removed'] = removed_count
+            if removed_count:
+                logger.info(f"Inativadas {removed_count} propriedades desatualizadas (Supabase)")
         except Exception as e:
-            logger.error(f"Erro ao remover propriedades desatualizadas: {e}")
+            logger.error(f"Erro ao marcar propriedades desatualizadas: {e}")
     
     async def get_fresh_properties_only(self, 
                                       query: str = "", 
@@ -526,31 +562,27 @@ class LivePricingSystem:
         return results
     
     async def get_pricing_stats(self) -> Dict[str, Any]:
-        """Estatísticas do sistema de preços"""
-        
+        """Estatísticas do sistema de preços (Supabase)."""
+
         try:
-            # Contar propriedades ativas
-            six_hours_ago = datetime.utcnow() - timedelta(hours=6)
-            
-            properties_ref = firebase_service.db.collection('properties')
-            active_query = properties_ref.where('status', '==', 'active') \
-                                        .where('updated_at', '>=', six_hours_ago)
-            
-            active_count = len(list(active_query.stream()))
-            
-            self.sync_stats["active_properties"] = active_count
-            
+            six_hours_ago = (datetime.utcnow() - timedelta(hours=self.freshness_hours)).isoformat()
+            result = supabase_client.client.table('properties') \
+                .select('property_id') \
+                .eq('status', 'active') \
+                .gte('updated_at', six_hours_ago) \
+                .execute()
+            active_count = len(result.data or [])
+            self.sync_stats['active_properties'] = active_count
             return {
                 **self.sync_stats,
-                "freshness_hours": self.freshness_hours,
-                "min_data_quality": self.min_data_quality,
-                "sciensa_enabled": self.sciensa_config["enabled"],
-                "sincroniza_enabled": self.sincroniza_config["enabled"],
-                "cache_size": len(self.sync_cache)
+                'freshness_hours': self.freshness_hours,
+                'min_data_quality': self.min_data_quality,
+                'sciensa_enabled': self.sciensa_config['enabled'],
+                'sincroniza_enabled': self.sincroniza_config['enabled'],
+                'cache_size': len(self.sync_cache)
             }
-            
         except Exception as e:
-            logger.error(f"Erro ao obter estatísticas: {e}")
+            logger.error(f"Erro ao obter estatísticas (Supabase): {e}")
             return self.sync_stats
 
 # Instância global

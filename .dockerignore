@@ -32,11 +32,6 @@ logs/
 .env.*
 *.env
 
-# Credentials
-*credentials*.json
-firebase-credentials.json
-alloha-credentials.json
-
 # Backups
 backups/
 backup_*.json

@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from .firebase_service import FirebaseService
+from app.services.supabase_client import supabase_client
 from app.services.rag_pipeline import rag
 
 logging.basicConfig(level=logging.INFO)
@@ -25,9 +25,8 @@ class PropertyIntelligenceService:
     """Serviço que integra o GPT/OpenAI (RAG) com dados imobiliários"""
 
     def __init__(self):
-        self.firebase_service = FirebaseService()
         # Nome do modelo GPT/OpenAI
-        self.openai_model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+        self.openai_model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
         self.property_cache = {}
         self.cache_expiry = timedelta(hours=6)
         self.last_cache_update = None
@@ -46,19 +45,26 @@ class PropertyIntelligenceService:
         }
 
     async def load_property_data(self) -> bool:
-        """Carrega dados de imóveis do Firebase ou cache"""
+        """Carrega dados de imóveis do Supabase ou cache"""
         try:
             if (self.last_cache_update and
                 datetime.now() - self.last_cache_update < self.cache_expiry and
                 self.property_cache):
                 return True
 
-            properties = await self.firebase_service.get_property_data()
+            # Buscar imóveis do Supabase
+            properties = await asyncio.to_thread(
+                supabase_client.client.table('properties').select('*').execute
+            )
 
-            if properties:
-                self.property_cache = properties
+            if properties.data:
+                # Converter para formato esperado
+                self.property_cache = {
+                    'properties': properties.data,
+                    'statistics': self._calculate_statistics(properties.data)
+                }
                 self.last_cache_update = datetime.now()
-                logger.info(f"Dados de {len(properties)} imóveis carregados do Firebase")
+                logger.info(f"Dados de {len(properties.data)} imóveis carregados do Supabase")
                 return True
             else:
                 self._load_sample_data()
@@ -66,9 +72,33 @@ class PropertyIntelligenceService:
                 return True
 
         except Exception as e:
-            logger.error(f"Erro ao carregar dados de imóveis: {str(e)}")
+            logger.error(f"Erro ao carregar dados de imóveis do Supabase: {str(e)}")
             self._load_sample_data()
             return False
+    
+    def _calculate_statistics(self, properties: List[Dict]) -> Dict[str, Any]:
+        """Calcula estatísticas dos imóveis"""
+        stats = {
+            'total_properties': len(properties),
+            'by_type': {},
+            'by_transaction': {},
+            'by_city': {}
+        }
+        
+        for prop in properties:
+            # Por tipo
+            prop_type = prop.get('property_type', 'unknown')
+            stats['by_type'][prop_type] = stats['by_type'].get(prop_type, 0) + 1
+            
+            # Por transação
+            trans_type = prop.get('transaction_type', 'unknown')
+            stats['by_transaction'][trans_type] = stats['by_transaction'].get(trans_type, 0) + 1
+            
+            # Por cidade
+            city = prop.get('city', 'unknown')
+            stats['by_city'][city] = stats['by_city'].get(city, 0) + 1
+        
+        return stats
 
     def _load_sample_data(self):
         """Carrega dados de exemplo para demonstração"""
@@ -351,7 +381,10 @@ class PropertyIntelligenceService:
              logger.info(f"Busca de imóveis - User: {user_id}, Critérios: {criteria}")
 
              properties = self.search_properties(criteria)
-             await self.firebase_service.save_property_search(user_id, criteria, len(properties))
+             
+             # Salvar histórico de busca no Supabase (opcional - desabilitado por enquanto)
+             # await self._save_property_search_supabase(user_id, criteria, len(properties))
+             
              response = self.format_property_response(properties, criteria)
 
              # Enriquecer a resposta com GPT (RAG-like assistant)

@@ -8,7 +8,7 @@ import logging
 import os
 import io
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import tempfile
 import base64
 
@@ -16,7 +16,7 @@ import openai
 from pydub import AudioSegment
 import speech_recognition as sr
 
-from app.services.firebase_service import firebase_service
+from app.services.supabase_client import supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -320,63 +320,87 @@ class VoicePTTSystem:
                                     transcribed_text: str,
                                     response_text: str,
                                     audio_duration: float):
-        """Salva interação de voz no Firebase"""
-        
+        """Salva interação de voz no Supabase (voice_interactions)."""
+
         try:
             interaction_data = {
-                "phone": phone,
-                "transcribed_text": transcribed_text,
-                "response_text": response_text,
-                "audio_duration_seconds": audio_duration,
-                "interaction_type": "voice_ptt",
-                "created_at": datetime.utcnow(),
-                "engagement_boost": True  # Flag para análise
+                'phone': phone,
+                'transcribed_text': transcribed_text,
+                'response_text': response_text,
+                'audio_duration_seconds': audio_duration,
+                'interaction_type': 'voice_ptt',
+                'engagement_boost': True,
+                'created_at': datetime.utcnow().isoformat()
             }
-            
-            # Salvar na coleção voice_interactions
-            await firebase_service.db.collection('voice_interactions').add(interaction_data)
-            
-            logger.debug(f"Interação de voz salva: {phone}")
-            
+            await asyncio.to_thread(
+                lambda: supabase_client.client.table('voice_interactions')
+                    .insert(interaction_data)
+                    .execute()
+            )
+            logger.debug(f"Interação de voz salva (Supabase): {phone}")
         except Exception as e:
-            logger.error(f"Erro ao salvar interação de voz: {e}")
+            logger.error(f"Erro ao salvar interação de voz (Supabase): {e}")
     
     async def should_respond_with_voice(self, phone: str, message_text: str = None) -> bool:
-        """Determina se deve responder com voz (A/B testing)"""
-        
+        """Determina se deve responder com voz (A/B test 20%) usando Supabase."""
         try:
-            # Verificar configuração do usuário
-            user_prefs = await firebase_service.get_user_preferences(phone)
-            
-            if user_prefs and "voice_responses" in user_prefs:
-                return user_prefs["voice_responses"]
-            
-            # A/B testing: 20% dos usuários recebem voz
+            prefs = await self._get_user_preferences(phone)
+            if prefs and 'voice_responses' in prefs:
+                return prefs['voice_responses']
+
             phone_hash = abs(hash(phone)) % 100
             voice_enabled = phone_hash < 20
-            
-            # Salvar preferência
-            await firebase_service.set_user_preference(phone, "voice_responses", voice_enabled)
-            
+            await self._set_user_preference(phone, 'voice_responses', voice_enabled)
             return voice_enabled
-            
         except Exception as e:
-            logger.debug(f"Erro ao verificar preferência de voz: {e}")
+            logger.debug(f"Erro ao verificar preferência de voz (Supabase): {e}")
             return False
     
     async def enable_voice_for_user(self, phone: str, enabled: bool = True):
-        """Habilita/desabilita voz para usuário específico"""
-        
+        """Habilita/desabilita voz para usuário específico (Supabase)."""
         try:
-            await firebase_service.set_user_preference(phone, "voice_responses", enabled)
-            
-            status = "habilitadas" if enabled else "desabilitadas"
-            logger.info(f"Respostas de voz {status} para {phone}")
-            
+            await self._set_user_preference(phone, 'voice_responses', enabled)
+            status = 'habilitadas' if enabled else 'desabilitadas'
+            logger.info(f"Respostas de voz {status} para {phone} (Supabase)")
             return True
-            
         except Exception as e:
-            logger.error(f"Erro ao configurar voz para usuário: {e}")
+            logger.error(f"Erro ao configurar voz para usuário (Supabase): {e}")
+            return False
+
+    async def _get_user_preferences(self, phone: str) -> Dict[str, Any]:
+        """Busca preferences JSON de user_preferences (Supabase)."""
+        try:
+            result = await asyncio.to_thread(
+                lambda: supabase_client.client.table('user_preferences')
+                    .select('preferences')
+                    .eq('phone_number', phone)
+                    .limit(1)
+                    .execute()
+            )
+            if result.data:
+                return result.data[0].get('preferences', {}) or {}
+            return {}
+        except Exception:
+            return {}
+
+    async def _set_user_preference(self, phone: str, key: str, value: Any) -> bool:
+        """Upsert preferência específica dentro de JSON preferences."""
+        try:
+            prefs = await self._get_user_preferences(phone)
+            prefs[key] = value
+            upsert_data = {
+                'phone_number': phone,
+                'preferences': prefs,
+                'updated_at': datetime.utcnow().isoformat()
+            }
+            await asyncio.to_thread(
+                lambda: supabase_client.client.table('user_preferences')
+                    .upsert(upsert_data, on_conflict='phone_number')
+                    .execute()
+            )
+            return True
+        except Exception as e:
+            logger.debug(f"Erro ao salvar preferência (Supabase): {e}")
             return False
     
     def get_voice_stats(self) -> Dict[str, Any]:

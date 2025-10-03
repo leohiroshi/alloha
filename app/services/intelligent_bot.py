@@ -13,16 +13,14 @@ import tempfile
 import base64
 import json
 from dotenv import load_dotenv
-import firebase_admin
-from firebase_admin import credentials, firestore
+
 from app.services.rag_pipeline import rag
 from app.services.property_intelligence import property_intelligence
 from app.services.embedding_cache import embedding_cache
 from app.models.conversation_state import conversation_manager, ConversationState
 from app.services.webhook_idempotency import webhook_idempotency
-
-from app.services.whatsapp_service import WhatsAppService  # assume exists in workspace
-from app.services.firebase_service import firebase_service
+from app.services.whatsapp_service import WhatsAppService
+from app.services.supabase_client import supabase_client
 
 load_dotenv()
 
@@ -33,24 +31,6 @@ if not logger.hasHandlers():
     formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-
-# Inicialize o Firebase apenas uma vez
-if not firebase_admin._apps:
-    firebase_credentials_json = os.getenv("FIREBASE_CREDENTIALS")
-    if firebase_credentials_json and firebase_credentials_json.strip().startswith("{"):
-        # Cria arquivo temporário com o conteúdo do JSON
-        temp_cred_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
-        temp_cred_file.write(firebase_credentials_json.encode())
-        temp_cred_file.close()
-        firebase_cred_path = temp_cred_file.name
-    else:
-        # Se já for um caminho, usa direto
-        firebase_cred_path = firebase_credentials_json
-
-    if firebase_cred_path:
-        cred = credentials.Certificate(firebase_cred_path)
-        firebase_admin.initialize_app(cred)
-db = firestore.client()
 
 # RAG endpoint (HTTP fallback, se necessário)
 RAG_ENDPOINT = os.getenv("RAG_ENDPOINT", "http://localhost:8000/query")
@@ -75,11 +55,31 @@ class IntelligentRealEstateBot:
         logger.info("Bot de Inteligência Imobiliária iniciado")
 
     async def get_conversation_history(self, user_phone, limit=10) -> List[Dict[str, str]]:
-        """Delega ao FirebaseService para obter histórico de conversa (async)."""
+        """Busca histórico de conversa usando Supabase."""
         try:
-            return await firebase_service.get_conversation_history(user_phone, limit)
+            conversation = await asyncio.to_thread(
+                supabase_client.get_or_create_conversation,
+                user_phone
+            )
+            
+            messages = await asyncio.to_thread(
+                supabase_client.get_conversation_messages,
+                conversation['id'],
+                limit
+            )
+            
+            # Converter para formato esperado
+            history = []
+            for msg in reversed(messages):  # Ordem cronológica
+                history.append({
+                    "direction": msg["direction"],
+                    "message": msg["content"],
+                    "timestamp": msg["created_at"]
+                })
+            
+            return history
         except Exception as e:
-            logger.debug(f"Falha ao obter histórico via FirebaseService: {e}")
+            logger.debug(f"Falha ao obter histórico via Supabase: {e}")
             return []
 
     async def process_message(self, message: str, user_phone: str) -> str:
@@ -104,15 +104,21 @@ class IntelligentRealEstateBot:
                     {"processing": True, "last_message": message}
                 )
 
-            # 3) Salva mensagem recebida (received)
-            await asyncio.to_thread(db.collection("messages").add, {
-                "user_phone": user_phone,
-                "message": message,
-                "direction": "received",
-                "timestamp": datetime.utcnow(),
-                "metadata": {"conversation_state": current_state.value}
-            })
-            logger.info(f"Mensagem salva no Firestore para {user_phone}.")
+            # 3) Salva mensagem recebida (received) no Supabase
+            conversation = await asyncio.to_thread(
+                supabase_client.get_or_create_conversation,
+                user_phone
+            )
+            await asyncio.to_thread(
+                supabase_client.save_message,
+                conversation['id'],
+                'received',
+                message,
+                'text',
+                None,
+                {"conversation_state": current_state.value}
+            )
+            logger.info(f"Mensagem salva no Supabase para {user_phone}.")
 
             if self.whatsapp_service is None:
                 token = os.getenv("WHATSAPP_ACCESS_TOKEN")
@@ -156,12 +162,10 @@ class IntelligentRealEstateBot:
                             if "role" in h and "content" in h:
                                 normalized.append({"role": h["role"], "content": h["content"]})
                                 continue
-                            # Firestore saved message shape
                             if "direction" in h and "message" in h:
                                 role = "user" if h.get("direction") == "received" else "assistant"
                                 normalized.append({"role": role, "content": h.get("message", "")})
                                 continue
-                            # Alternative firestore doc shape used in firebase_service: keys id, message, direction
                             if "message" in h and "direction" in h:
                                 role = "user" if h.get("direction") == "received" else "assistant"
                                 normalized.append({"role": role, "content": h.get("message", "")})
@@ -183,23 +187,29 @@ class IntelligentRealEstateBot:
             short_history = normalized_history + [{"role": "user", "content": message}]
             prompt_with_history = prompt + "\n\nHISTORY:\n" + "\n".join([f"{h['role']}: {h['content']}" for h in short_history])
 
-            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
             response_text = await asyncio.to_thread(rag.call_gpt, prompt_with_history, model)
 
             if not response_text:
                 response_text = "Desculpe, não consegui gerar uma resposta no momento."
 
-            # Persistir a mensagem final como "sent" no Firestore
+            # Persistir a mensagem final como "sent" no Supabase
             try:
-                await asyncio.to_thread(db.collection("messages").add, {
-                    "user_phone": user_phone,
-                    "message": response_text,
-                    "direction": "sent",
-                    "timestamp": datetime.utcnow(),
-                    "metadata": {"ai": True}
-                })
+                conversation = await asyncio.to_thread(
+                    supabase_client.get_or_create_conversation,
+                    user_phone
+                )
+                await asyncio.to_thread(
+                    supabase_client.save_message,
+                    conversation['id'],
+                    'sent',
+                    response_text,
+                    'text',
+                    None,
+                    {"ai": True}
+                )
             except Exception:
-                logger.exception("Falha ao persistir mensagem enviada no Firestore.")
+                logger.exception("Falha ao persistir mensagem enviada no Supabase.")
 
             # Envia a mensagem final via WhatsApp (se configurado)
             if getattr(self, "whatsapp_service", None):
@@ -210,18 +220,24 @@ class IntelligentRealEstateBot:
                 except Exception:
                     logger.exception("Erro ao enviar mensagem via WhatsAppService.")
             else:
-                logger.debug("WhatsAppService não está configurado; mensagem persistida apenas no Firestore.")
+                logger.debug("WhatsAppService não está configurado; mensagem persistida apenas no Supabase.")
 
         except Exception as e:
             logger.exception(f"Erro ao gerar/enviar resposta: {e}")
             try:
-                await asyncio.to_thread(db.collection("messages").add, {
-                    "user_phone": user_phone,
-                    "message": "Desculpe, ocorreu um erro ao gerar a resposta.",
-                    "direction": "sent",
-                    "timestamp": datetime.utcnow(),
-                    "metadata": {"ai": True, "error": True}
-                })
+                conversation = await asyncio.to_thread(
+                    supabase_client.get_or_create_conversation,
+                    user_phone
+                )
+                await asyncio.to_thread(
+                    supabase_client.save_message,
+                    conversation['id'],
+                    'sent',
+                    "Desculpe, ocorreu um erro ao gerar a resposta.",
+                    'text',
+                    None,
+                    {"ai": True, "error": True}
+                )
             except Exception:
                 logger.debug("Falha ao persistir mensagem de erro.")
 
@@ -279,7 +295,7 @@ class IntelligentRealEstateBot:
                 prompt += f"{role}: {msg['content']}\n"
             prompt += "Sofia:"
 
-            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
             response_text = await asyncio.to_thread(rag.call_gpt, prompt, model)
             return response_text.strip() if response_text else (
                 "😅 Tive dificuldade técnica para responder no momento. Por favor, tente novamente em instantes."
@@ -312,7 +328,7 @@ class IntelligentRealEstateBot:
                 + "\n".join([f"{h['role']}: {h['content']}" for h in history])
                 + f"\n\nMESSAGE:\n{message}\n\nReturn JSON example:\n{json.dumps(example, ensure_ascii=False)}\n\nJSON:"
             )
-            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
             resp = await asyncio.to_thread(rag.call_gpt, prompt, model)
             if not resp:
                 return {}
@@ -327,45 +343,41 @@ class IntelligentRealEstateBot:
             return {}
 
     async def _upsert_user_profile(self, user_phone: str, profile: dict):
-        """Atualiza/insere documento do usuário com os dados extraídos."""
+        """
+        Atualiza/insere documento do usuário com os dados extraídos.
+        TODO: Migrar para Supabase (tabela user_profiles)
+        """
         try:
-            if not profile:
-                return
-            doc_ref = db.collection("users").document(user_phone)
-            # normalize basic keys
-            to_save = {}
-            for k in ["name", "email", "phone", "transaction_type", "budget_min", "budget_max", "preferred_neighborhoods", "bedrooms", "contact_time"]:
-                if k in profile and profile[k] not in (None, "", []):
-                    to_save[k] = profile[k]
-            to_save["last_seen"] = datetime.utcnow()
-            doc_ref.set(to_save, merge=True)
-            logger.info(f"Perfil atualizado para {user_phone}: {list(to_save.keys())}")
+            logger.warning("⚠️ _upsert_user_profile ainda não migrado para Supabase - funcionalidade desabilitada temporariamente")
+            return
+            # TODO: Implementar usando supabase_client
+            # if not profile:
+            #     return
+            # ...
         except Exception as e:
             logger.debug(f"Erro upsert user profile: {e}")
 
     async def _save_property_search(self, user_phone: str, query: str, criteria: dict):
-        """Salva histórico de buscas do usuário em property_searches."""
+        """
+        Salva histórico de buscas do usuário em property_searches.
+        TODO: Migrar para Supabase (tabela property_searches)
+        """
         try:
-            coll = db.collection("property_searches")
-            doc = {
-                "user_phone": user_phone,
-                "query": query,
-                "criteria": criteria or {},
-                "timestamp": datetime.utcnow()
-            }
-            coll.add(doc)
-            logger.info(f"Property search saved for {user_phone}")
+            logger.warning("⚠️ _save_property_search ainda não migrado para Supabase - funcionalidade desabilitada temporariamente")
+            return
+            # TODO: Implementar usando supabase_client
+            # ...
         except Exception as e:
             logger.debug(f"Erro salvar property_search: {e}")
 
-    async def process_property_search(self, user_query: str) -> tuple[str, list]:
+    async def process_property_search(self, user_query: str, phone_number: Optional[str] = None) -> tuple[str, list]:
         """
-        Busca imóveis usando RAG local com resposta mais natural.
+        Busca imóveis usando RAG local com resposta mais natural e session cache.
         Retorna: (resposta_texto, lista_de_imoveis_estruturados)
         """
         try:
-            # 1) Buscar documentos relevantes
-            retrieved_docs = await self._retrieve_property_documents(user_query)
+            # 1) Buscar documentos relevantes (com cache filtering)
+            retrieved_docs = await self._retrieve_property_documents(user_query, phone_number=phone_number)
             if not retrieved_docs:
                 return self._handle_no_results(), []
 
@@ -382,9 +394,15 @@ class IntelligentRealEstateBot:
             return "Desculpe, ocorreu um erro técnico. Tente novamente em alguns instantes.", []
 
 
-    async def _retrieve_property_documents(self, user_query: str) -> list:
-        """Busca documentos no RAG local"""
-        retrieved = await rag.retrieve(user_query, top_k=8, filters={})
+    async def _retrieve_property_documents(self, user_query: str, phone_number: Optional[str] = None) -> list:
+        """Busca documentos no RAG local com session cache"""
+        # Gerar phone_hash se phone_number fornecido
+        phone_hash = None
+        if phone_number:
+            import hashlib
+            phone_hash = hashlib.md5(phone_number.encode()).hexdigest()
+        
+        retrieved = await rag.retrieve(user_query, top_k=8, filters={}, phone_hash=phone_hash)
         hits = retrieved or []
         logger.info("RAG encontrou %d documentos para: %s", len(hits), user_query[:100])
         return hits
@@ -466,7 +484,7 @@ class IntelligentRealEstateBot:
         context = self._build_llm_context(user_query, normalized_hits)
         
         # Chamar LLM
-        model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+        model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
         response = await asyncio.to_thread(rag.call_gpt, context, model)
         
         return response or self._handle_no_results()
@@ -564,7 +582,7 @@ class IntelligentRealEstateBot:
         - Se falhar, usa heurística simples como fallback.
         """
         try:
-            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
             prompt = (
                 "Analise se o usuário está PROCURANDO/BUSCANDO um imóvel para alugar ou comprar. "
                 "Retorne JSON: {\"intent\": \"property_search\" ou \"other\", \"confidence\": 0.0-1.0}\n\n"
@@ -619,7 +637,7 @@ class IntelligentRealEstateBot:
     async def _call_sofia_vision(self, prompt: str, image_base64: str, model_name: Optional[str] = None) -> str:
         """Envio de prompt + imagem (base64) para o GPT via call_gpt (executa em thread)."""
         try:
-            model = model_name or os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            model = model_name or os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
             full_prompt = prompt + "\n\n---BEGIN_IMAGE_BASE64---\n" + image_base64 + "\n---END_IMAGE_BASE64---\n\n"
             full_prompt += "Resuma em até 300 caracteres e destaque campos relevantes."
             resp = await asyncio.to_thread(rag.call_gpt, full_prompt, model)
@@ -629,49 +647,41 @@ class IntelligentRealEstateBot:
             return "📸 Não foi possível analisar a imagem agora. Tente novamente mais tarde."
 
     async def _save_attachment(self, owner_phone: str, storage_url: str, content_type: str, size: int, message_id: str = None, meta: dict = None):
-        """Salvar metadados de attachments no Firestore (executa em thread)."""
+        """
+        Salvar metadados de attachments no Firestore (executa em thread).
+        TODO: Migrar para Supabase (tabela attachments)
+        """
         try:
-            doc = {
-                "attachment_id": storage_url.split("/")[-1],
-                "owner_phone": owner_phone,
-                "storage_url": storage_url,
-                "content_type": content_type,
-                "size": size,
-                "message_id": message_id,
-                "meta": meta or {},
-                "uploaded_at": datetime.utcnow()
-            }
-            await asyncio.to_thread(db.collection("attachments").document(doc["attachment_id"]).set, doc)
-            logger.info(f"Attachment salvo: {doc['attachment_id']}")
+            logger.warning("⚠️ _save_attachment ainda não migrado para Supabase - funcionalidade desabilitada temporariamente")
+            return
+            # TODO: Implementar usando supabase_client
+            # ...
         except Exception as e:
             logger.debug(f"Erro salvar attachment: {e}")
 
     async def _save_audit(self, action: str, actor: str = "system", details: dict | None = None):
-        """Registra auditoria de ações críticas."""
+        """
+        Registra auditoria de ações críticas.
+        TODO: Migrar para Supabase (tabela audit_logs)
+        """
         try:
-            doc = {
-                "action": action,
-                "actor": actor,
-                "timestamp": datetime.utcnow(),
-                "details": details or {}
-            }
-            await asyncio.to_thread(db.collection("audits").add, doc)
-            logger.info(f"Audit registrado: {action}")
+            logger.warning("⚠️ _save_audit ainda não migrado para Supabase - funcionalidade desabilitada temporariamente")
+            return
+            # TODO: Implementar usando supabase_client
+            # ...
         except Exception as e:
             logger.debug(f"Erro salvar audit: {e}")
 
     async def _save_embedding_meta(self, doc_id: str, vector_id: str, model: str, meta: dict | None = None):
-        """Salva metadados de embeddings (vetores são guardados no vector DB)."""
+        """
+        Salva metadados de embeddings (vetores são guardados no vector DB).
+        TODO: Migrar para Supabase (tabela embedding_metadata)
+        """
         try:
-            doc = {
-                "doc_id": doc_id,
-                "vector_id": vector_id,
-                "model": model,
-                "meta": meta or {},
-                "created_at": datetime.utcnow()
-            }
-            await asyncio.to_thread(db.collection("embeddings").document(vector_id).set, doc)
-            logger.info(f"Embedding meta salvo: {vector_id}")
+            logger.warning("⚠️ _save_embedding_meta ainda não migrado para Supabase - funcionalidade desabilitada temporariamente")
+            return
+            # TODO: Implementar usando supabase_client
+            # ...
         except Exception as e:
             logger.debug(f"Erro salvar embedding meta: {e}")
 
@@ -685,8 +695,8 @@ class IntelligentRealEstateBot:
         try:
             logger.info("Iniciando fluxo de property_search para %s: %s", user_phone, user_query[:120])
             
-            # 1) PRIMEIRO: Buscar imóveis e gerar resposta natural
-            answer, structured_properties = await self.process_property_search(user_query)
+            # 1) PRIMEIRO: Buscar imóveis e gerar resposta natural (COM CACHE!)
+            answer, structured_properties = await self.process_property_search(user_query, phone_number=user_phone)
             
             if not answer:
                 answer = "Desculpe, não encontrei imóveis com essas características no momento."
@@ -738,22 +748,28 @@ class IntelligentRealEstateBot:
                 except Exception:
                     logger.exception("Erro ao enviar resposta da Sofia")
 
-            # 4) Persistir mensagem enviada (só se não foi CTA)
+            # 4) Persistir mensagem enviada (só se não foi CTA) no Supabase
             if not cta_sent:
                 try:
-                    await asyncio.to_thread(db.collection("messages").add, {
-                        "user_phone": user_phone,
-                        "message": answer,
-                        "direction": "sent",
-                        "timestamp": datetime.utcnow(),
-                        "metadata": {
+                    conversation = await asyncio.to_thread(
+                        supabase_client.get_or_create_conversation,
+                        user_phone
+                    )
+                    await asyncio.to_thread(
+                        supabase_client.save_message,
+                        conversation['id'],
+                        'sent',
+                        answer,
+                        'text',
+                        None,
+                        {
                             "ai": True, 
                             "flow": "property_search",
                             "cta_sent": cta_sent,
                             "properties_found": len(structured_properties),
                             "should_send_cta": should_send_cta
                         }
-                    })
+                    )
                 except Exception:
                     logger.exception("Falha ao persistir mensagem de property_search no Firestore.")
                 
@@ -774,7 +790,7 @@ class IntelligentRealEstateBot:
                 return False
             
             # Usar LLM para analisar se a resposta da Sofia indica que deve enviar CTA
-            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+            model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
             prompt = (
                 "Analise se a resposta da Sofia indica que ela ENCONTROU IMÓVEIS ESPECÍFICOS "
                 "e está apresentando opções concretas, ou se ela está PEDINDO MAIS INFORMAÇÕES "

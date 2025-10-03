@@ -1,6 +1,6 @@
 """
 Sistema de Extração Inteligente de Imóveis
-Executa o scraper a cada 30 minutos, compara imóveis do site com Firebase,
+Executa o scraper a cada 30 minutos, compara imóveis do site com Supabase,
 adiciona, remove ou atualiza imóveis conforme necessário.
 Integrado com GPT/OpenAI para análise inteligente de dados e Selenium para renderização.
 """
@@ -28,7 +28,7 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
 # internal services
-from app.services.firebase_service import FirebaseService
+from app.services.supabase_client import supabase_client
 from app.services.rag_pipeline import rag
 from app.services.intelligent_bot import intelligent_bot
 
@@ -56,10 +56,9 @@ class AllegaPropertyScraper:
         self._driver = None
 
         # GPT/OpenAI model
-        self.openai_model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:sofia:CKv6isOD")
+        self.openai_model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
 
-        # Firebase service
-        self.firebase = FirebaseService()
+    # Supabase client já está disponível via import
 
     def _create_driver(self):
         opts = Options()
@@ -390,35 +389,49 @@ class AllegaPropertyScraper:
 # monitor and main functions preserved (use as before)
 async def monitor_scraper(interval_minutes: int = 30, max_properties: int = 100):
     scraper = AllegaPropertyScraper()
-    firebase = FirebaseService()
     interval = interval_minutes * 60
     while True:
         logger.info(f"[{datetime.utcnow()}] Iniciando verificação de imóveis...")
         try:
             scraped_properties = await scraper.scrape_all_properties(max_per_type=max_properties // 4)
             scraped_dict = {p.get('reference') or p.get('url'): p for p in scraped_properties if p}
-            firebase_props = await firebase.get_property_data()
-            firebase_dict = {p.get('reference') or p.get('url'): p for p in firebase_props if p}
+            # Buscar imóveis existentes do Supabase
+            result = await asyncio.to_thread(
+                supabase_client.client.table('properties').select('*').execute
+            )
+            supabase_props = result.data or []
+            supabase_dict = {p.get('reference') or p.get('url'): p for p in supabase_props if p}
 
-            new_refs = set(scraped_dict.keys()) - set(firebase_dict.keys())
+            new_refs = set(scraped_dict.keys()) - set(supabase_dict.keys())
             new_props = [scraped_dict[r] for r in new_refs if r]
-            removed_refs = set(firebase_dict.keys()) - set(scraped_dict.keys())
-            removed_props = [firebase_dict[r] for r in removed_refs if r]
+            removed_refs = set(supabase_dict.keys()) - set(scraped_dict.keys())
+            removed_props = [supabase_dict[r] for r in removed_refs if r]
 
             updated = []
-            for ref in set(scraped_dict.keys()) & set(firebase_dict.keys()):
-                if scraped_dict[ref] != firebase_dict[ref]:
+            for ref in set(scraped_dict.keys()) & set(supabase_dict.keys()):
+                if scraped_dict[ref] != supabase_dict[ref]:
                     updated.append(scraped_dict[ref])
 
+            # Adicionar novos imóveis
+            for prop in new_props:
+                await asyncio.to_thread(supabase_client.upsert_property, prop)
             if new_props:
-                logger.info(f"Adicionando {len(new_props)} imóveis ao Firebase")
-                await firebase.add_properties(new_props)
+                logger.info(f"Adicionados {len(new_props)} imóveis ao Supabase")
+
+            # Remover imóveis que não existem mais
+            for prop in removed_props:
+                ref = prop.get('reference') or prop.get('url')
+                await asyncio.to_thread(
+                    supabase_client.client.table('properties').delete().eq('reference', ref).execute
+                )
             if removed_props:
-                logger.info(f"Removendo {len(removed_props)} imóveis do Firebase")
-                await firebase.remove_properties([p.get('reference') or p.get('url') for p in removed_props])
+                logger.info(f"Removidos {len(removed_props)} imóveis do Supabase")
+
+            # Atualizar imóveis modificados
+            for prop in updated:
+                await asyncio.to_thread(supabase_client.upsert_property, prop)
             if updated:
-                logger.info(f"Atualizando {len(updated)} imóveis no Firebase")
-                await firebase.update_properties(updated)
+                logger.info(f"Atualizados {len(updated)} imóveis no Supabase")
 
             if scraped_properties:
                 insights = await scraper.generate_market_insights(scraped_properties)

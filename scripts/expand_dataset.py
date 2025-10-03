@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """
-Script para Expansão Automática de Dataset Fine-Tuning
-Uso: python expand_dataset.py [--from-firebase] [--from-csv path.csv] [--augment-factor 3]
+Script para Expansão Automática de Dataset Fine-Tuning (Supabase Only)
+Uso: python expand_dataset.py [--from-supabase] [--from-csv path.csv] [--augment-factor 3]
+
+Flags:
+    --from-supabase     Captura conversas recentes do Supabase (tabela messages + conversations)
+    --from-csv arquivo  Importa export de WhatsApp Business em CSV (colunas phone/contact, message, direction, timestamp)
+    --augment-factor N  Multiplica dataset via variações sintéticas (default=3)
+    --min-examples N    Número mínimo antes de aplicar augmentation/salvar
+    --output nome       Prefixo do arquivo de saída (sem extensão)
+
+Notas:
+- Conversas são deduplicadas via hash de conteúdo (sem system message)
 """
 import asyncio
 import argparse
@@ -26,8 +36,8 @@ async def main():
     """Execução principal do script"""
     
     parser = argparse.ArgumentParser(description='Expandir dataset de fine-tuning')
-    parser.add_argument('--from-firebase', action='store_true', 
-                       help='Capturar conversas do Firebase')
+    parser.add_argument('--from-supabase', action='store_true', 
+                       help='Capturar conversas do Supabase (últimos 30 dias)')
     parser.add_argument('--from-csv', type=str, 
                        help='Caminho para export CSV do WhatsApp')
     parser.add_argument('--augment-factor', type=int, default=3,
@@ -52,15 +62,15 @@ async def main():
     else:
         logger.warning("⚠️ Arquivo base não encontrado, criando dataset do zero")
     
-    # 2. Capturar do Firebase (se solicitado)
-    if args.from_firebase:
-        logger.info("🔥 Capturando conversas do Firebase...")
+    # 2. Capturar do Supabase (se solicitado)
+    if args.from_supabase:
+        logger.info("🗄️ Capturando conversas do Supabase...")
         try:
-            firebase_examples = await dataset_expander.expand_from_firebase(limit=200)
-            all_examples.extend(firebase_examples)
-            logger.info(f"✅ {len(firebase_examples)} exemplos capturados do Firebase")
+            supabase_examples = await dataset_expander.expand_from_supabase(limit=200)
+            all_examples.extend(supabase_examples)
+            logger.info(f"✅ {len(supabase_examples)} exemplos capturados do Supabase")
         except Exception as e:
-            logger.error(f"❌ Erro ao capturar do Firebase: {e}")
+            logger.error(f"❌ Erro ao capturar do Supabase: {e}")
     
     # 3. Carregar CSV do WhatsApp (se fornecido)
     if args.from_csv:
@@ -75,7 +85,7 @@ async def main():
     # 4. Verificar se temos exemplos suficientes
     if len(all_examples) < args.min_examples:
         logger.error(f"❌ Poucos exemplos encontrados ({len(all_examples)} < {args.min_examples})")
-        logger.info("💡 Tente: --from-firebase ou --from-csv arquivo.csv")
+        logger.info("💡 Tente: --from-supabase ou --from-csv arquivo.csv")
         return
     
     logger.info(f"📊 Total de {len(all_examples)} exemplos coletados")

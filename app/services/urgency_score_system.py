@@ -4,13 +4,13 @@ Detecta sinais de urgência e alerta corretores em < 5min
 """
 import asyncio
 import logging
-from typing import Dict, List, Any
-from datetime import datetime
+from typing import Dict, List, Any, Optional
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 import json
 import re
 
-from app.services.firebase_service import firebase_service
+from app.services.supabase_client import supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -217,41 +217,61 @@ class UrgencyScoreSystem:
         
         return max(urgency_scores) if urgency_scores else 1
     
-    async def _build_client_profile(self, phone: str, history: List[Dict] = None) -> Dict[str, Any]:
-        """Constrói perfil do cliente para contexto"""
-        
+    async def _build_client_profile(self, phone: str, history: Optional[List[Dict]] = None) -> Dict[str, Any]:
+        """Constrói perfil do cliente usando dados do Supabase (conversations + messages)."""
+
         profile = {
-            "phone": phone,
-            "first_contact": datetime.utcnow(),
-            "total_messages": 0,
-            "engagement_level": "low",
-            "preferences": {},
-            "urgency_history": []
+            'phone': phone,
+            'first_contact': datetime.utcnow().isoformat(),
+            'total_messages': 0,
+            'engagement_level': 'low',
+            'preferences': {},
+            'urgency_history': []
         }
-        
         try:
-            # Buscar dados do Firestore
-            existing_conversation = await firebase_service.get_conversation(phone)
-            
-            if existing_conversation:
-                messages = existing_conversation.get('messages', [])
-                profile["total_messages"] = len(messages)
-                profile["first_contact"] = existing_conversation.get('created_at', datetime.utcnow())
-                
-                # Calcular engajamento
-                if len(messages) > 10:
-                    profile["engagement_level"] = "high"
-                elif len(messages) > 5:
-                    profile["engagement_level"] = "medium"
-                
-                # Extrair preferências
-                all_text = " ".join([msg.get('content', '') for msg in messages])
-                profile["preferences"] = self._extract_preferences(all_text)
-            
+            # Buscar conversa mais recente
+            conversation_result = await asyncio.to_thread(
+                lambda: supabase_client.client.table('conversations')
+                    .select('id, created_at, last_message_at')
+                    .eq('phone_number', phone)
+                    .order('created_at')
+                    .limit(1)
+                    .execute()
+            )
+            conversation = conversation_result.data[0] if conversation_result.data else None
+
+            if not conversation:
+                return profile
+
+            profile['first_contact'] = conversation.get('created_at', profile['first_contact'])
+
+            # Buscar mensagens da conversa
+            messages_result = await asyncio.to_thread(
+                lambda: supabase_client.client.table('messages')
+                    .select('content, created_at, direction')
+                    .eq('conversation_id', conversation['id'])
+                    .order('created_at')
+                    .limit(200)
+                    .execute()
+            )
+            messages = messages_result.data or []
+            profile['total_messages'] = len(messages)
+
+            # Engajamento
+            if profile['total_messages'] > 10:
+                profile['engagement_level'] = 'high'
+            elif profile['total_messages'] > 5:
+                profile['engagement_level'] = 'medium'
+
+            # Preferências
+            all_text = ' '.join([m.get('content', '') for m in messages if m.get('content')])
+            if all_text:
+                profile['preferences'] = self._extract_preferences(all_text)
+
+            return profile
         except Exception as e:
-            logger.debug(f"Erro ao construir perfil do cliente: {e}")
-        
-        return profile
+            logger.debug(f"Erro ao construir perfil (Supabase): {e}")
+            return profile
     
     def _extract_preferences(self, text: str) -> Dict[str, Any]:
         """Extrai preferências do texto consolidado"""
@@ -284,111 +304,92 @@ class UrgencyScoreSystem:
         return preferences
     
     async def _save_urgency_alert(self, alert: UrgencyAlert):
-        """Salva alert no Firebase para dashboard do corretor"""
-        
+        """Salva alerta de urgência no Supabase (urgency_alerts)."""
         try:
             alert_data = {
-                "phone": alert.phone,
-                "message": alert.message[:500],  # Limitar tamanho
-                "urgency_score": alert.urgency_score,
-                "urgency_reasons": alert.urgency_reasons,
-                "detected_at": alert.detected_at,
-                "client_profile": alert.client_profile,
-                "suggested_actions": alert.suggested_actions,
-                "status": "pending",  # pending, contacted, resolved
-                "assigned_broker": None
+                'phone': alert.phone,
+                'message': alert.message[:500],
+                'urgency_score': alert.urgency_score,
+                'urgency_reasons': alert.urgency_reasons,
+                'detected_at': alert.detected_at.isoformat(),
+                'client_profile': alert.client_profile,
+                'suggested_actions': alert.suggested_actions,
+                'status': 'pending',
+                'assigned_broker': None,
+                'created_at': datetime.utcnow().isoformat()
             }
-            
-            # Salvar na coleção urgency_alerts
-            await firebase_service.db.collection('urgency_alerts').add(alert_data)
-            
-            logger.info(f"Alert urgência salvo: {alert.phone} (score {alert.urgency_score})")
-            
+            await asyncio.to_thread(
+                lambda: supabase_client.client.table('urgency_alerts')
+                    .insert(alert_data)
+                    .execute()
+            )
+            logger.info(f"Alert urgência salvo (Supabase): {alert.phone} (score {alert.urgency_score})")
         except Exception as e:
-            logger.error(f"Erro ao salvar alert de urgência: {e}")
+            logger.error(f"Erro ao salvar alert de urgência (Supabase): {e}")
     
     async def _notify_broker_urgent(self, alert: UrgencyAlert):
-        """Notifica corretor sobre urgência alta (score >= 4)"""
-        
+        """Notifica corretor sobre urgência alta (Supabase)."""
         try:
-            # Aqui você pode integrar com:
-            # - WhatsApp Business API para corretor
-            # - Slack/Teams notification
-            # - Email urgent
-            # - Push notification no app
-            
             notification_data = {
-                "type": "urgent_lead",
-                "phone": alert.phone,
-                "urgency_score": alert.urgency_score,
-                "message_preview": alert.message[:100],
-                "suggested_actions": alert.suggested_actions[:2],
-                "detected_at": alert.detected_at.isoformat(),
-                "client_profile": {
-                    "engagement": alert.client_profile.get("engagement_level", "unknown"),
-                    "total_messages": alert.client_profile.get("total_messages", 0)
-                }
+                'type': 'urgent_lead',
+                'phone': alert.phone,
+                'urgency_score': alert.urgency_score,
+                'message_preview': alert.message[:100],
+                'suggested_actions': alert.suggested_actions[:2],
+                'detected_at': alert.detected_at.isoformat(),
+                'client_profile': {
+                    'engagement': alert.client_profile.get('engagement_level', 'unknown'),
+                    'total_messages': alert.client_profile.get('total_messages', 0)
+                },
+                'status': 'sent',
+                'created_at': datetime.utcnow().isoformat()
             }
-            
-            # Salvar notificação para dashboard
-            await firebase_service.db.collection('broker_notifications').add({
-                **notification_data,
-                "status": "sent",
-                "created_at": datetime.utcnow()
-            })
-            
-            logger.warning(f"🚨 URGENT LEAD: {alert.phone} (score {alert.urgency_score})")
-            
-            # Aqui você adicionaria integrações externas:
-            # await self._send_slack_notification(notification_data)
-            # await self._send_whatsapp_to_broker(notification_data)
-            
+            await asyncio.to_thread(
+                lambda: supabase_client.client.table('broker_notifications')
+                    .insert(notification_data)
+                    .execute()
+            )
+            logger.warning(f"🚨 URGENT LEAD (Supabase): {alert.phone} (score {alert.urgency_score})")
         except Exception as e:
-            logger.error(f"Erro ao notificar corretor: {e}")
+            logger.error(f"Erro ao notificar corretor (Supabase): {e}")
     
     async def get_pending_alerts(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Recupera alerts pendentes para dashboard"""
-        
+        """Recupera alerts pendentes (Supabase) últimos 7 dias."""
         try:
-            # Buscar alerts dos últimos 7 dias
-            seven_days_ago = datetime.utcnow() - timedelta(days=7)
-            
-            alerts_ref = firebase_service.db.collection('urgency_alerts')
-            query = alerts_ref.where('detected_at', '>=', seven_days_ago) \
-                             .where('status', '==', 'pending') \
-                             .order_by('urgency_score', direction='DESCENDING') \
-                             .order_by('detected_at', direction='DESCENDING') \
-                             .limit(limit)
-            
-            docs = query.stream()
-            
-            alerts = []
-            for doc in docs:
-                alert_data = doc.to_dict()
-                alert_data['id'] = doc.id
-                alerts.append(alert_data)
-            
-            logger.info(f"Recuperados {len(alerts)} alerts pendentes")
+            seven_days_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+            result = await asyncio.to_thread(
+                lambda: supabase_client.client.table('urgency_alerts')
+                    .select('*')
+                    .gte('detected_at', seven_days_ago)
+                    .eq('status', 'pending')
+                    .order('urgency_score', desc=True)
+                    .order('detected_at', desc=True)
+                    .limit(limit)
+                    .execute()
+            )
+            alerts = result.data or []
+            logger.info(f"Recuperados {len(alerts)} alerts pendentes (Supabase)")
             return alerts
-            
         except Exception as e:
-            logger.error(f"Erro ao recuperar alerts pendentes: {e}")
+            logger.error(f"Erro ao recuperar alerts pendentes (Supabase): {e}")
             return []
     
     async def mark_alert_as_contacted(self, alert_id: str, broker_name: str):
-        """Marca alert como contatado pelo corretor"""
-        
+        """Marca alert como contatado (Supabase)."""
         try:
-            await firebase_service.db.collection('urgency_alerts').document(alert_id).update({
-                'status': 'contacted',
-                'contacted_at': datetime.utcnow(),
-                'contacted_by': broker_name
-            })
-            
-            logger.info(f"Alert {alert_id} marcado como contatado por {broker_name}")
-            
+            await asyncio.to_thread(
+                lambda: supabase_client.client.table('urgency_alerts')
+                    .update({
+                        'status': 'contacted',
+                        'contacted_at': datetime.utcnow().isoformat(),
+                        'contacted_by': broker_name
+                    })
+                    .eq('id', alert_id)
+                    .execute()
+            )
+            logger.info(f"Alert {alert_id} marcado como contatado por {broker_name} (Supabase)")
         except Exception as e:
-            logger.error(f"Erro ao marcar alert como contatado: {e}")
+            logger.error(f"Erro ao marcar alert como contatado (Supabase): {e}")
     
     def get_urgency_stats(self) -> Dict[str, Any]:
         """Estatísticas do sistema de urgência"""

@@ -65,10 +65,14 @@ jobs:
                       value: "${{ secrets.WHATSAPP_ACCESS_TOKEN }}"
                     - name: WHATSAPP_PHONE_NUMBER_ID
                       value: "${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}"
-                    - name: FIREBASE_CREDENTIALS
-                      secretRef: firebase-credentials
+                    - name: SUPABASE_URL
+                      secretRef: supabase-url
+                    - name: SUPABASE_SERVICE_KEY
+                      secretRef: supabase-service-key
                     - name: OPENAI_API_KEY
                       secretRef: openai-api-key
+                    - name: OPENAI_MODEL
+                      value: "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi"
                     - name: ENVIRONMENT
                       value: "production"
                     - name: HOST
@@ -84,12 +88,12 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Atualizar secrets
           az containerapp secret set \
             --name alloha-backend \
             --resource-group rg-alloha-prod \
             --secrets \
-              firebase-credentials='${{ secrets.FIREBASE_CREDENTIALS }}' \
+              supabase-url='${{ secrets.SUPABASE_URL }}' \
+              supabase-service-key='${{ secrets.SUPABASE_SERVICE_KEY }}' \
               openai-api-key='${{ secrets.OPENAI_API_KEY }}'
 
           # Deploy usando YAML

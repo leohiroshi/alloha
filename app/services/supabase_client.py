@@ -1,12 +1,12 @@
 """
-Supabase Client - Drop-in replacement para Firebase
+Supabase Client - Drop-in replacement
 Suporta busca híbrida (vector + full-text), cache, e idempotency
 """
 
 import os
 import logging
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -30,7 +30,7 @@ class SupabaseClient:
         
         self.client: Client = create_client(self.supabase_url, self.supabase_key)
         
-        # Modelo de embeddings (mesmo usado no Firebase)
+        # Modelo de embeddings
         self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
         
         logger.info("✅ Supabase client inicializado")
@@ -38,6 +38,79 @@ class SupabaseClient:
     # ================================================================
     # PROPERTIES - Busca híbrida avançada
     # ================================================================
+    
+    def vector_search(
+        self,
+        query_embedding: List[float],
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        distance_threshold: float = 1.5
+    ) -> List[Dict[str, Any]]:
+        """
+        Busca por similaridade usando pgvector
+        Retorna imóveis mais similares ao embedding da query
+        
+        Args:
+            query_embedding: Embedding da query (384 dimensões para all-MiniLM-L6-v2)
+            limit: Número máximo de resultados
+            filters: Filtros adicionais (preço, tipo, etc)
+            distance_threshold: Threshold de distância (quanto menor, mais similar)
+        
+        Returns:
+            Lista de dicts com id, property_id, content, metadata, distance
+        """
+        try:
+            # Usar função RPC para busca vetorial
+            # Isso assume que existe uma função no Supabase:
+            # CREATE OR REPLACE FUNCTION vector_property_search(
+            #   query_embedding vector(384),
+            #   match_threshold float,
+            #   max_results int
+            # )
+            # RETURNS TABLE (id uuid, property_id text, content text, metadata jsonb, distance float)
+            # LANGUAGE plpgsql
+            # AS $$
+            # BEGIN
+            #   RETURN QUERY
+            #   SELECT 
+            #     pe.id,
+            #     pe.property_id,
+            #     pe.content,
+            #     pe.metadata,
+            #     (pe.embedding <-> query_embedding) AS distance
+            #   FROM property_embeddings pe
+            #   WHERE (pe.embedding <-> query_embedding) < match_threshold
+            #   ORDER BY distance
+            #   LIMIT max_results;
+            # END;
+            # $$;
+            
+            result = self.client.rpc(
+                'vector_property_search',
+                {
+                    'query_embedding': query_embedding,
+                    'match_threshold': distance_threshold,
+                    'max_results': limit
+                }
+            ).execute()
+            
+            if not result.data:
+                logger.warning("⚠️ Vector search retornou vazio")
+                return []
+            
+            results = result.data
+            
+            # Aplicar filtros adicionais se fornecidos
+            if filters:
+                results = self._apply_metadata_filters(results, filters)
+            
+            logger.info(f"🔍 Vector search retornou {len(results)} resultados")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Erro no vector_search: {e}")
+            logger.warning("⚠️ Verifique se a função vector_property_search existe no Supabase")
+            return []
     
     def search_properties(
         self, 
@@ -175,6 +248,43 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"❌ Erro em get_or_create_conversation: {e}")
             raise
+
+    def get_user_profile(self, phone_number: str) -> Optional[Dict[str, Any]]:
+        """Recupera dados agregados do usuário (conversa + lead)."""
+        try:
+            profile: Dict[str, Any] = {"phone_number": phone_number}
+
+            conversation_result = self.client.table('conversations')\
+                .select('*')\
+                .eq('phone_number', phone_number)\
+                .order('last_message_at', desc=True)\
+                .limit(1)\
+                .execute()
+
+            conversation = conversation_result.data[0] if conversation_result.data else None
+            if conversation:
+                profile['conversation'] = conversation
+                profile['state'] = conversation.get('state')
+                profile['last_message_at'] = conversation.get('last_message_at')
+                profile['urgency_score'] = conversation.get('urgency_score')
+                profile['metadata'] = conversation.get('metadata') or {}
+
+            lead_result = self.client.table('leads')\
+                .select('*')\
+                .eq('phone_number', phone_number)\
+                .order('created_at', desc=True)\
+                .limit(1)\
+                .execute()
+
+            lead = lead_result.data[0] if lead_result.data else None
+            if lead:
+                profile['lead'] = lead
+
+            return profile
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao buscar profile do usuário {phone_number}: {e}")
+            return None
     
     def update_conversation_state(
         self, 
@@ -203,6 +313,97 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"❌ Erro ao atualizar estado: {e}")
             return False
+
+    def get_user_stats(self, phone_number: str) -> Dict[str, Any]:
+        """Calcula estatísticas de conversas e mensagens de um usuário."""
+        try:
+            default_stats = {
+                'total_conversations': 0,
+                'total_messages': 0,
+                'first_contact': None,
+                'last_contact': None,
+                'messages_today': 0,
+                'received_messages': 0,
+                'sent_messages': 0,
+                'last_state': None,
+                'last_urgency_score': None
+            }
+
+            conversations_result = self.client.table('conversations')\
+                .select('id, state, urgency_score, created_at, last_message_at')\
+                .eq('phone_number', phone_number)\
+                .order('created_at', desc=True)\
+                .execute()
+
+            conversations = conversations_result.data or []
+            if not conversations:
+                return default_stats
+
+            conversation_ids = [conv['id'] for conv in conversations]
+
+            messages_query = self.client.table('messages')\
+                .select('id, direction, created_at')\
+                .in_('conversation_id', conversation_ids)\
+                .order('created_at')\
+                .execute()
+
+            messages = messages_query.data or []
+
+            def _parse(ts: Any) -> Optional[datetime]:
+                if ts is None:
+                    return None
+                if isinstance(ts, datetime):
+                    return ts
+                if isinstance(ts, str):
+                    try:
+                        return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                    except Exception:
+                        return None
+                return None
+
+            timestamps = [dt for dt in (_parse(msg.get('created_at')) for msg in messages) if dt]
+            if not timestamps:
+                first_contact = _parse(conversations[-1].get('created_at'))
+                last_contact = _parse(conversations[0].get('last_message_at'))
+            else:
+                first_contact = min(timestamps)
+                last_contact = max(timestamps)
+
+            today = datetime.now(timezone.utc).date()
+            messages_today = sum(1 for ts in timestamps if ts.astimezone(timezone.utc).date() == today)
+
+            sent_messages = sum(1 for msg in messages if msg.get('direction') == 'sent')
+            received_messages = sum(1 for msg in messages if msg.get('direction') in ('received', 'inbound'))
+
+            latest_conversation = conversations[0]
+
+            stats = {
+                'total_conversations': len(conversations),
+                'total_messages': len(messages),
+                'first_contact': first_contact.isoformat() if first_contact else None,
+                'last_contact': last_contact.isoformat() if last_contact else None,
+                'messages_today': messages_today,
+                'received_messages': received_messages,
+                'sent_messages': sent_messages,
+                'last_state': latest_conversation.get('state'),
+                'last_urgency_score': latest_conversation.get('urgency_score')
+            }
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"❌ Erro ao calcular stats do usuário {phone_number}: {e}")
+            return {
+                'total_conversations': 0,
+                'total_messages': 0,
+                'first_contact': None,
+                'last_contact': None,
+                'messages_today': 0,
+                'received_messages': 0,
+                'sent_messages': 0,
+                'last_state': None,
+                'last_urgency_score': None
+            }
     
     # ================================================================
     # MESSAGES - Com TTL automático
@@ -409,6 +610,43 @@ class SupabaseClient:
     # ================================================================
     # HELPER FUNCTIONS
     # ================================================================
+    
+    def _apply_metadata_filters(
+        self,
+        results: List[Dict[str, Any]],
+        filters: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Aplica filtros aos metadados dos resultados de vector search"""
+        filtered = results
+        
+        for result in filtered:
+            metadata = result.get('metadata', {})
+            
+            # Filtro de preço mínimo
+            if 'min_price' in filters:
+                if metadata.get('price', 0) < filters['min_price']:
+                    filtered.remove(result)
+                    continue
+            
+            # Filtro de preço máximo
+            if 'max_price' in filters:
+                if metadata.get('price', float('inf')) > filters['max_price']:
+                    filtered.remove(result)
+                    continue
+            
+            # Filtro de tipo de imóvel
+            if 'property_type' in filters:
+                if metadata.get('property_type') != filters['property_type']:
+                    filtered.remove(result)
+                    continue
+            
+            # Filtro de quartos
+            if 'bedrooms' in filters:
+                if metadata.get('bedrooms', 0) < filters['bedrooms']:
+                    filtered.remove(result)
+                    continue
+        
+        return filtered
     
     def _apply_filters(
         self, 

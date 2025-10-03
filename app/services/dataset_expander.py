@@ -78,38 +78,66 @@ class DatasetExpander:
             lambda v: f"aproximadamente R$ {v:,.0f}".replace(",", ".")
         ]
         
-    async def expand_from_firebase(self, limit: int = 100) -> List[TrainingExample]:
-        """Captura conversas do Firebase e converte em exemplos"""
-        examples = []
-        
+    async def expand_from_supabase(self, limit: int = 100) -> List[TrainingExample]:
+        """Captura conversas recentes do Supabase e converte em exemplos"""
+        examples: List[TrainingExample] = []
         try:
-            from app.services.firebase_service import firebase_service
-            
-            # Buscar conversas dos últimos 30 dias
-            cutoff = datetime.utcnow() - timedelta(days=30)
-            
-            # Query otimizada para conversas completas
-            messages = await firebase_service.get_recent_conversations(
-                since=cutoff, 
-                limit=limit
-            )
-            
-            # Agrupar por telefone para formar conversas
-            conversations = self._group_messages_by_phone(messages)
-            
+            from app.services.supabase_client import supabase_client
+
+            cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
+
+            # Buscar mensagens recentes (limit ** total **, depois agrupamos)
+            msg_res = supabase_client.client.table('messages') \
+                .select('id, conversation_id, direction, content, created_at') \
+                .gte('created_at', cutoff) \
+                .order('created_at') \
+                .limit(limit * 20) \
+                .execute()
+
+            messages = msg_res.data or []
+            if not messages:
+                return []
+
+            # Mapear conversas → phone_number
+            conv_ids = list({m['conversation_id'] for m in messages if m.get('conversation_id')})
+            phone_map = {}
+            if conv_ids:
+                chunk_size = 100
+                for i in range(0, len(conv_ids), chunk_size):
+                    chunk = conv_ids[i:i+chunk_size]
+                    conv_res = supabase_client.client.table('conversations') \
+                        .select('id, phone_number') \
+                        .in_('id', chunk) \
+                        .execute()
+                    for c in (conv_res.data or []):
+                        phone_map[c['id']] = c.get('phone_number') or 'unknown'
+
+            # Reformatar estrutura para reuso de _group_messages_by_phone
+            firebase_like_messages = []
+            for m in messages:
+                firebase_like_messages.append({
+                    'user_phone': phone_map.get(m.get('conversation_id'), 'unknown'),
+                    'direction': 'received' if m.get('direction') in ('received', 'inbound') else 'sent',
+                    'message': m.get('content'),
+                    'timestamp': m.get('created_at')
+                })
+
+            conversations = self._group_messages_by_phone(firebase_like_messages)
+
             for phone, msgs in conversations.items():
-                if len(msgs) < 2:  # Precisa de pelo menos user + assistant
+                if len(msgs) < 2:
                     continue
-                
-                example = self._convert_conversation_to_example(msgs, "firebase", phone)
+                example = self._convert_conversation_to_example(msgs, "supabase", phone)
                 if example and self._is_valid_example(example):
                     examples.append(example)
-                    logger.info(f"Exemplo capturado do Firebase: {phone}")
-        
+                    if len(examples) >= limit:
+                        break
+
+            logger.info(f"Capturados {len(examples)} exemplos do Supabase")
+            return examples
         except Exception as e:
-            logger.error(f"Erro ao capturar do Firebase: {e}")
-        
-        return examples
+            logger.error(f"Erro ao capturar do Supabase: {e}")
+            return []
     
     def load_whatsapp_export(self, csv_path: str) -> List[TrainingExample]:
         """Carrega export CSV do WhatsApp Business"""

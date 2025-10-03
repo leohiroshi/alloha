@@ -13,7 +13,7 @@ import os
 import subprocess
 
 from app.services.dataset_expander import dataset_expander
-from app.services.firebase_service import firebase_service
+from app.services.supabase_client import supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -107,27 +107,58 @@ class DatasetLivingLoop:
     async def _get_new_conversations(self) -> list:
         """Buscar conversas novas desde último check"""
         try:
-            # Buscar mensagens desde último check
-            raw_messages = await firebase_service.get_recent_conversations(
-                since=self.last_check,
-                limit=500
-            )
-            
-            # Converter para exemplos de treinamento
+            # Buscar mensagens no Supabase desde o último check
+            since_iso = self.last_check.isoformat()
+            result = supabase_client.client.table('messages') \
+                .select('id, conversation_id, direction, content, created_at') \
+                .gte('created_at', since_iso) \
+                .order('created_at') \
+                .limit(500) \
+                .execute()
+
+            messages = result.data or []
+            if not messages:
+                return []
+
+            # Mapear phone_number das conversas envolvidas
+            conversation_ids = list({m['conversation_id'] for m in messages if m.get('conversation_id')})
+            phone_map = {}
+            try:
+                if conversation_ids:
+                    # Supabase limita tamanho 'in_' muito grande; garantir fatiamento se necessário
+                    chunk_size = 100
+                    for i in range(0, len(conversation_ids), chunk_size):
+                        chunk = conversation_ids[i:i+chunk_size]
+                        conv_res = supabase_client.client.table('conversations') \
+                            .select('id, phone_number, state, urgency_score, last_message_at') \
+                            .in_('id', chunk) \
+                            .execute()
+                        for conv in (conv_res.data or []):
+                            phone_map[conv['id']] = conv.get('phone_number')
+            except Exception as e:
+                logger.debug(f"Falha ao mapear conversas: {e}")
+
+            # Converter cada mensagem em um mini-exemplo (mantendo lógica anterior)
             examples = []
-            
-            for msg in raw_messages:
+            for msg in messages:
                 try:
+                    enriched_msg = {
+                        'id': msg.get('id'),
+                        'user_phone': phone_map.get(msg.get('conversation_id'), 'unknown'),
+                        'message': msg.get('content'),
+                        'direction': msg.get('direction'),
+                        'timestamp': msg.get('created_at'),
+                    }
                     example = dataset_expander._convert_conversation_to_example(
-                        [msg], 
-                        "firebase_living", 
-                        msg.get('user_phone', 'unknown')
+                        [enriched_msg],
+                        "supabase_living",
+                        enriched_msg['user_phone']
                     )
                     if example:
                         examples.append(example)
                 except Exception as e:
                     logger.debug(f"Erro ao converter mensagem: {e}")
-            
+
             return examples
         
         except Exception as e:

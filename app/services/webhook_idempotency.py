@@ -12,15 +12,29 @@ import json
 logger = logging.getLogger(__name__)
 
 class WebhookIdempotency:
-    """Gerenciador de idempotência para webhooks WhatsApp"""
-    
+    """Gerenciador de idempotência para webhooks WhatsApp.
+
+    Refatorado: não agenda mais tarefa de limpeza no __init__ para evitar
+    RuntimeError ("no running event loop") durante import estático.
+    Chamar explicitamente webhook_idempotency.start() no evento de startup FastAPI.
+    """
+
     def __init__(self, ttl_minutes: int = 60):
         self.ttl_minutes = ttl_minutes
         self.processed_messages: Dict[str, Dict] = {}
         self.processing_locks: Dict[str, asyncio.Lock] = {}
-        
-        # Cleanup task
-        asyncio.create_task(self._cleanup_expired())
+        self._cleanup_task: Optional[asyncio.Task] = None
+
+    def start(self):
+        """Inicia task de limpeza (idempotente)."""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            try:
+                loop = asyncio.get_running_loop()
+                self._cleanup_task = loop.create_task(self._cleanup_expired())
+                logger.info("✅ WebhookIdempotency cleanup task iniciada")
+            except RuntimeError:
+                # Sem loop rodando: ignorar; será chamada novamente no startup
+                logger.warning("⚠️ start() chamado sem event loop em execução; adiar")
     
     def _generate_message_fingerprint(self, webhook_data: Dict[str, Any]) -> str:
         """Gera fingerprint único da mensagem para detectar duplicatas"""
@@ -182,5 +196,5 @@ class WebhookIdempotency:
             "ttl_minutes": self.ttl_minutes
         }
 
-# Instância global
+# Instância global (start chamado explicitamente no app startup)
 webhook_idempotency = WebhookIdempotency()

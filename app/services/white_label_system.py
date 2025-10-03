@@ -14,7 +14,7 @@ import secrets
 import aiohttp
 from jinja2 import Template
 
-from app.services.firebase_service import firebase_service
+from app.services.supabase_client import supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -243,17 +243,18 @@ class WhiteLabelSystem:
         return base_subdomain
     
     async def _subdomain_exists(self, subdomain: str) -> bool:
-        """Verifica se subdomínio já existe"""
-        
+        """Verifica se subdomínio já existe (Supabase)."""
         try:
-            # Verificar no Firebase
-            sites_ref = firebase_service.db.collection('white_label_sites')
-            query = sites_ref.where('subdomain', '==', subdomain).limit(1)
-            
-            docs = list(query.stream())
-            return len(docs) > 0
-            
-        except Exception:
+            result = await asyncio.to_thread(
+                lambda: supabase_client.client.table('white_label_sites')
+                    .select('site_id')
+                    .eq('subdomain', subdomain)
+                    .limit(1)
+                    .execute()
+            )
+            return bool(result.data)
+        except Exception as e:
+            logger.debug(f"Erro ao verificar subdomínio no Supabase: {e}")
             return False
     
     async def _setup_dns_record(self, subdomain: str) -> Dict[str, Any]:
@@ -475,68 +476,67 @@ class WhiteLabelSystem:
                                      email: str,
                                      template_id: str,
                                      config: Dict[str, Any]) -> Dict[str, Any]:
-        """Salva configuração do site no Firebase"""
-        
+        """Salva configuração do site no Supabase (tabela white_label_sites)."""
+
         try:
             site_id = f"site_{subdomain}_{secrets.token_hex(8)}"
-            
+            now_iso = datetime.utcnow().isoformat()
             site_data = {
-                "site_id": site_id,
-                "subdomain": subdomain,
-                "full_domain": f"{subdomain}.{self.base_domain}",
-                "company_name": company_name,
-                "company_email": email,
-                "template_id": template_id,
-                "config": config,
-                "status": "active",
-                "created_at": datetime.utcnow(),
-                "last_updated": datetime.utcnow(),
-                "deployment_version": "1.0.0",
-                "analytics": {
-                    "page_views": 0,
-                    "unique_visitors": 0,
-                    "leads_generated": 0,
-                    "whatsapp_clicks": 0
+                'site_id': site_id,
+                'subdomain': subdomain,
+                'full_domain': f"{subdomain}.{self.base_domain}",
+                'company_name': company_name,
+                'company_email': email,
+                'template_id': template_id,
+                'config': config,  # Armazenado como JSONB
+                'status': 'active',
+                'created_at': now_iso,
+                'last_updated': now_iso,
+                'deployment_version': '1.0.0',
+                'analytics': {
+                    'page_views': 0,
+                    'unique_visitors': 0,
+                    'leads_generated': 0,
+                    'whatsapp_clicks': 0
                 }
             }
-            
-            # Salvar no Firebase
-            await firebase_service.db.collection('white_label_sites').document(site_id).set(site_data)
-            
+
+            # Insert
+            result = await asyncio.to_thread(
+                lambda: supabase_client.client.table('white_label_sites')
+                    .insert(site_data)
+                    .execute()
+            )
+
+            if result.data:
+                return result.data[0]
             return site_data
-            
         except Exception as e:
-            logger.error(f"Erro ao salvar configuração do site: {e}")
+            logger.error(f"Erro ao salvar configuração do site (Supabase): {e}")
             raise
     
     async def _setup_whatsapp_integration(self, subdomain: str, site_id: str) -> Dict[str, Any]:
-        """Configura integração WhatsApp para o site"""
-        
+        """Configura integração WhatsApp para o site (Supabase)."""
         try:
-            # Webhook URL único para o site
             webhook_url = f"https://api.alloha.ai/webhook/whatsapp/{site_id}"
-            
-            # Configuração específica do site
             whatsapp_config = {
-                "webhook_url": webhook_url,
-                "site_id": site_id,
-                "subdomain": subdomain,
-                "enabled": True,
-                "auto_responses": True,
-                "lead_routing": "auto"  # auto, manual, specific_agent
+                'webhook_url': webhook_url,
+                'site_id': site_id,
+                'subdomain': subdomain,
+                'enabled': True,
+                'auto_responses': True,
+                'lead_routing': 'auto',
+                'created_at': datetime.utcnow().isoformat()
             }
-            
-            # Salvar configuração WhatsApp
-            await firebase_service.db.collection('whatsapp_integrations').document(site_id).set({
-                **whatsapp_config,
-                "created_at": datetime.utcnow()
-            })
-            
+            await asyncio.to_thread(
+                lambda: supabase_client.client.table('whatsapp_integrations')
+                    .upsert(whatsapp_config, on_conflict='site_id')
+                    .execute()
+            )
             return whatsapp_config
-            
         except Exception as e:
-            logger.error(f"Erro na integração WhatsApp: {e}")
-            return {"webhook_url": "", "enabled": False}
+            logger.error(f"Erro na integração WhatsApp (Supabase): {e}")
+            return {'webhook_url': '', 'enabled': False}
     
     async def get_available_templates(self) -> List[Dict[str, Any]]:
         """Retorna templates disponíveis"""
@@ -553,34 +553,35 @@ class WhiteLabelSystem:
         return templates
     
     async def get_site_analytics(self, site_id: str) -> Dict[str, Any]:
-        """Recupera analytics do site"""
-        
+        """Recupera analytics do site (Supabase)."""
         try:
-            site_doc = await firebase_service.db.collection('white_label_sites').document(site_id).get()
-            
-            if site_doc.exists:
-                site_data = site_doc.to_dict()
-                
-                return {
-                    "site_info": {
-                        "subdomain": site_data["subdomain"],
-                        "company_name": site_data["company_name"],
-                        "status": site_data["status"],
-                        "created_at": site_data["created_at"]
-                    },
-                    "analytics": site_data.get("analytics", {}),
-                    "performance": {
-                        "uptime_percent": 99.9,  # Integrar com monitoring real
-                        "avg_response_time_ms": 250,
-                        "ssl_status": "active"
-                    }
+            result = await asyncio.to_thread(
+                lambda: supabase_client.client.table('white_label_sites')
+                    .select('*')
+                    .eq('site_id', site_id)
+                    .limit(1)
+                    .execute()
+            )
+            if not result.data:
+                return {'error': 'Site não encontrado'}
+            site_data = result.data[0]
+            return {
+                'site_info': {
+                    'subdomain': site_data.get('subdomain'),
+                    'company_name': site_data.get('company_name'),
+                    'status': site_data.get('status'),
+                    'created_at': site_data.get('created_at')
+                },
+                'analytics': site_data.get('analytics', {}),
+                'performance': {
+                    'uptime_percent': 99.9,
+                    'avg_response_time_ms': 250,
+                    'ssl_status': 'active'
                 }
-            else:
-                return {"error": "Site não encontrado"}
-                
+            }
         except Exception as e:
-            logger.error(f"Erro ao obter analytics: {e}")
-            return {"error": str(e)}
+            logger.error(f"Erro ao obter analytics (Supabase): {e}")
+            return {'error': str(e)}
     
     def _is_valid_domain(self, domain: str) -> bool:
         """Valida formato de domínio"""
