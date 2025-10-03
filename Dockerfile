@@ -9,13 +9,14 @@ ARG INSTALL_TORCH=true
 
 WORKDIR /app
 
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-# System deps (kept minimal). Added libnss3 for Chrome stability when INSTALL_BROWSER=true
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ curl wget gnupg ca-certificates libnss3 \
+# System deps (curl needed for healthcheck and optional browser installs)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    wget \
+    gnupg \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # If you need browser for Selenium, enable at build: --build-arg INSTALL_BROWSER=true
@@ -36,22 +37,15 @@ RUN if [ "$INSTALL_TORCH" = "true" ] ; then \
       pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch==2.2.2+cpu" ; \
     fi
 
-# Install remaining Python deps (retry friendly)
-RUN pip install --no-cache-dir -r /app/requirements.txt \
- || pip install --no-cache-dir -r /app/requirements.txt
+# Install remaining Python deps
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy only runtime code (keep out secrets)
 # - app/: Python application package
 COPY app/ /app/app
 
-# Ensure app path is on PYTHONPATH (already set earlier by ENV consolidation)
+# Ensure app path is on PYTHONPATH
 ENV PYTHONPATH=/app
-
-# Optional: preload sentence-transformer models (can be skipped with BUILD_ARG PRELOAD_MODELS=false)
-ARG PRELOAD_MODELS=true
-RUN if [ "$PRELOAD_MODELS" = "true" ]; then \
-    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('all-MiniLM-L6-v2'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2'); print('Models preloaded')" || echo 'Model preload skipped'; \
-    fi
 
 # Create non-root user and set ownership
 RUN useradd --create-home --shell /bin/bash appuser \
