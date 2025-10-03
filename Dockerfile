@@ -42,7 +42,8 @@ RUN pip install -r requirements.txt
 
 # Preload models to reduce cold start (stored under /root/.cache)
 RUN if [ "$PRELOAD_MODELS" = "true" ]; then \
-    python - <<'PY' \nfrom sentence_transformers import SentenceTransformer, CrossEncoder\nSentenceTransformer('all-MiniLM-L6-v2')\nCrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')\nprint('Models preloaded')\nPY\n; fi
+    python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('all-MiniLM-L6-v2'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2'); print('Models preloaded')" ; \
+    fi
 
 # Create a virtualenv (optional slimming technique)
 RUN python -m venv /venv && /venv/bin/pip install --upgrade pip && \
