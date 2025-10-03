@@ -8,6 +8,8 @@ import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta, timezone
 import hashlib
+import re
+from uuid import uuid4
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from sentence_transformers import SentenceTransformer
@@ -200,33 +202,28 @@ class SupabaseClient:
         Insere ou atualiza imóvel (com embedding automático)
         """
         try:
-            # Gerar embedding da descrição
-            text_for_embedding = f"{property_data.get('title', '')} {property_data.get('description', '')}"
+            prepared = self._prepare_property_record(property_data)
+            if not prepared:
+                return None
+
+            # Gerar embedding da descrição para busca semântica
+            text_for_embedding = f"{prepared.get('title', '')} {prepared.get('description', '')}".strip()
             embedding = self.embedding_model.encode(text_for_embedding).tolist()
-            
-            property_data['embedding'] = embedding
-            property_data['updated_at'] = datetime.utcnow().isoformat()
-            
-            # Log para debug
-            logger.debug(f"Inserindo property: {property_data.get('property_id')}")
-            
-            result = self.client.table('properties')\
-                .upsert(property_data, on_conflict='property_id')\
+            prepared['embedding'] = embedding
+            prepared['updated_at'] = datetime.utcnow().isoformat()
+
+            logger.debug(f"Upsert property_id={prepared.get('property_id')} source={prepared.get('source')}")
+
+            result = self.client.table('properties') \
+                .upsert(prepared, on_conflict='property_id') \
                 .execute()
-            
-            # Verificar se retornou dados
-            if not result.data:
-                logger.error(f"❌ Upsert não retornou dados para {property_data.get('property_id')}")
-                logger.error(f"   Result: {result}")
+
+            if not result.data or len(result.data) == 0:
+                logger.error(f"❌ Upsert não retornou dados para {prepared.get('property_id')}")
                 return None
-            
-            if len(result.data) == 0:
-                logger.error(f"❌ Upsert retornou lista vazia para {property_data.get('property_id')}")
-                return None
-            
+
             property_id = result.data[0]['property_id']
-            logger.debug(f"✅ Imóvel {property_id} salvo")
-            
+            logger.debug(f"✅ Imóvel {property_id} salvo/atualizado")
             return property_id
             
         except Exception as e:
@@ -737,6 +734,90 @@ class SupabaseClient:
             filtered = [p for p in filtered if p.get('bedrooms', 0) >= filters['bedrooms']]
         
         return filtered
+
+    # ================================================================
+    # INTERNAL - NORMALIZATION FOR SCRAPED PROPERTIES
+    # ================================================================
+    def _prepare_property_record(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Transforma dict cru do scraper em registro compatível com tabela properties.
+        Remove campos desconhecidos (ex: ai_analysis, ai_enhanced) que causam 400.
+        """
+        if not raw:
+            return None
+
+        # Derivar property_id (preferência: reference -> property_id -> hash URL -> uuid)
+        reference = raw.get('reference') or raw.get('property_id')
+        if not reference:
+            url = raw.get('url') or ''
+            if url:
+                # gerar slug curta baseada na URL
+                slug_part = re.sub(r'[^a-zA-Z0-9]+', '-', url.split('/')[-1])[:40].strip('-')
+                reference = f"url-{slug_part or uuid4().hex[:8]}"
+            else:
+                reference = f"scr-{uuid4().hex[:10]}"
+
+        # Price: extrair números
+        raw_price = str(raw.get('price') or '').replace('\u00a0', ' ')
+        price_value = None
+        if raw_price:
+            m = re.search(r'([\d\.\,]+)', raw_price)
+            if m:
+                num = m.group(1).replace('.', '').replace(',', '.')
+                try:
+                    price_value = float(num)
+                except Exception:
+                    price_value = None
+
+        # Address JSONB
+        address = None
+        if any(raw.get(k) for k in ('address','neighborhood','city','uf')):
+            address = raw.get('address') if isinstance(raw.get('address'), dict) else {}
+            address = address or {}
+            if raw.get('neighborhood'):
+                address['district'] = raw.get('neighborhood')
+            if raw.get('city'):
+                address['city'] = raw.get('city')
+            if raw.get('uf'):
+                address['state'] = raw.get('uf')
+
+        images = raw.get('images') if isinstance(raw.get('images'), list) else []
+        features = raw.get('features') if isinstance(raw.get('features'), list) else []
+
+        prepared: Dict[str, Any] = {
+            'property_id': reference,
+            'title': (raw.get('title') or 'Imóvel sem título')[:500],
+            'description': (raw.get('description') or '')[:5000],
+            'price': price_value,
+            'address': address,
+            'bedrooms': raw.get('bedrooms'),
+            'bathrooms': raw.get('bathrooms'),
+            'area_m2': raw.get('area_m2'),
+            'property_type': raw.get('property_type'),
+            'status': 'active',
+            'images': images or None,
+            'amenities': features[:50] or None,
+            'owner_info': None,
+            'source': raw.get('source') or 'allega_scraper',
+            'external_id': raw.get('reference') or reference,
+            'last_sync_at': datetime.utcnow().isoformat(),
+            'created_at': datetime.utcnow().isoformat(),  # só usado se inserir
+            'ai_analysis': (raw.get('ai_analysis') or '')[:500],
+            'url': raw.get('url')
+        }
+
+        # Remover chaves None para não sobrescrever existente com null desnecessário
+        prepared = {k: v for k, v in prepared.items() if v is not None}
+
+        # Log de campos ignorados (debug)
+        ignored = sorted(set(raw.keys()) - set(prepared.keys()))
+        noisy = [k for k in ignored if k.startswith('ai_') or k in ('url', 'scraped_at')]
+        if noisy:
+            logger.debug(f"Ignorando campos não suportados no upsert: {noisy}")
+
+        if not prepared.get('property_id'):
+            logger.error("Registro sem property_id após normalização – descartando")
+            return None
+        return prepared
 
 # Singleton instance
 supabase_client = SupabaseClient()
