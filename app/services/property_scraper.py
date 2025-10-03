@@ -27,6 +27,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
+# Detect runtime inside container without full Chrome installed
+CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
+CHROME_BINARY = os.getenv("CHROME_BINARY", "/usr/bin/chromium")
+
 # internal services
 from app.services.supabase_client import supabase_client
 from app.services.rag_pipeline import rag
@@ -61,19 +65,44 @@ class AllegaPropertyScraper:
     # Supabase client já está disponível via import
 
     def _create_driver(self):
+        """Cria driver Chromium/Chrome com fallback e logs claros.
+        Estratégia:
+        1) Se variável CHROME_BINARY existir (imagem com chromium instalado) usa binário local.
+        2) Caso contrário tenta webdriver_manager (download) - pode falhar em runtime restrito.
+        """
         opts = Options()
         if self.headless:
+            # '--headless=new' para Chrome 109+, fallback se falhar
             opts.add_argument("--headless=new")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
         opts.add_argument("--disable-gpu")
         opts.add_argument("--window-size=1920,1080")
-        # evita detecção básica
+        opts.add_argument("--disable-software-rasterizer")
         opts.add_argument("--user-agent=" + self.headers['User-Agent'])
-        service = ChromeService(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=opts)
-        driver.set_page_load_timeout(30)
-        return driver
+
+        # Se chromium já vem instalado via Docker (INSTALL_BROWSER=true)
+        if os.path.exists(CHROME_BINARY):
+            opts.binary_location = CHROME_BINARY
+            # Usar chromedriver system se existir
+            if os.path.exists(CHROMEDRIVER_PATH):
+                service = ChromeService(CHROMEDRIVER_PATH)
+                logger.info("Usando chromedriver de sistema")
+                driver = webdriver.Chrome(service=service, options=opts)
+                driver.set_page_load_timeout(30)
+                return driver
+
+        # Fallback: webdriver_manager (download)
+        try:
+            driver_path = ChromeDriverManager().install()
+            service = ChromeService(driver_path)
+            driver = webdriver.Chrome(service=service, options=opts)
+            driver.set_page_load_timeout(30)
+            logger.info("Chromedriver obtido via webdriver_manager")
+            return driver
+        except Exception as e:
+            logger.error(f"Falha ao iniciar Chrome/Chromium: {e}")
+            raise
 
     async def _get_driver(self):
         if self._driver:
