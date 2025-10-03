@@ -17,6 +17,7 @@ from app.services.dataset_living_loop import dataset_living_loop
 from app.services.dual_stack_intelligence import dual_stack_intelligence
 from app.services.urgency_score_system import urgency_score_system
 from app.services.autonomous_followup import autonomous_followup
+from app.services.voice_ptt_system import voice_ptt_system
 from app.services.live_pricing_system import live_pricing_system
 from app.services.white_label_system import white_label_system
 from app.services.supabase_client import supabase_client
@@ -66,20 +67,13 @@ async def startup_event():
         asyncio.create_task(live_pricing_system.start_live_sync_loop())
         logger.info("✅ Live pricing system iniciado")
         
-        # Inicializar sistema de voz (opcional)
-        enable_voice = os.getenv('ENABLE_VOICE_PTT', 'false').lower() in ('1','true','yes','on')
-        if enable_voice:
-            from app.services.voice_ptt_system import voice_ptt_system  # lazy import
-
-            # Limpeza de cache de voz a cada hora
-            async def cleanup_voice_cache():
-                while True:
-                    await asyncio.sleep(3600)  # 1 hora
-                    await voice_ptt_system.cleanup_old_cache()
-            asyncio.create_task(cleanup_voice_cache())
-            logger.info("✅ Voice PTT system habilitado")
-        else:
-            logger.info("ℹ️ Voice PTT desativado (ENABLE_VOICE_PTT=false)")
+        # Limpeza de cache de voz a cada hora
+        async def cleanup_voice_cache():
+            while True:
+                await asyncio.sleep(3600)  # 1 hora
+                await voice_ptt_system.cleanup_old_cache()
+        
+        asyncio.create_task(cleanup_voice_cache())
         
         # Inicializar Google Calendar (v1 desativado por padrão)
         if os.getenv('ENABLE_GOOGLE_CALENDAR', 'false').lower() in ('1','true','yes','on'):
@@ -91,7 +85,7 @@ async def startup_event():
         else:
             logger.info("ℹ️ Google Calendar desativado (ENABLE_GOOGLE_CALENDAR=false) - usando fallback de agendamento")
         
-        # Monitor de scraping
+        # Monitor de scraping sempre ativo
         asyncio.create_task(monitor_scraper())
         logger.info("✅ Property monitor iniciado")
 
@@ -851,21 +845,10 @@ async def create_white_label_site(
 async def get_dashboard_stats():
     """Estatísticas completas do dashboard"""
     try:
-        # Voice stats condicionais
-        voice_stats = None
-        if os.getenv('ENABLE_VOICE_PTT', 'false').lower() in ('1','true','yes','on'):
-            try:
-                from app.services.voice_ptt_system import voice_ptt_system  # lazy import
-                voice_stats = voice_ptt_system.get_voice_stats()
-            except Exception as e:
-                voice_stats = {"enabled": False, "error": str(e)}
-        else:
-            voice_stats = {"enabled": False}
-
         stats = {
             "dual_stack": dual_stack_intelligence.get_cache_stats(),
             "urgency_system": urgency_score_system.get_urgency_stats(),
-            "voice_ptt": voice_stats,
+            "voice_ptt": voice_ptt_system.get_voice_stats(),
             "live_pricing": await live_pricing_system.get_pricing_stats(),
             "white_label": white_label_system.get_deployment_stats(),
             "timestamp": datetime.utcnow().isoformat()

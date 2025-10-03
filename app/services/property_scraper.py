@@ -31,6 +31,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver")
 CHROME_BINARY = os.getenv("CHROME_BINARY", "/usr/bin/chromium")
 
+
 # internal services
 from app.services.supabase_client import supabase_client
 from app.services.rag_pipeline import rag

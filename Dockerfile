@@ -3,38 +3,30 @@
 
 FROM python:3.10-slim
 
-# Build args
-ARG INSTALL_BROWSER=false
+# Build args (INSTALL_TORCH retained; browser now always installed)
 ARG INSTALL_TORCH=true
 
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    ENABLE_SCRAPER=${ENABLE_SCRAPER:-true}
+    PIP_NO_CACHE_DIR=1
 
 # System deps (curl needed for healthcheck and optional browser installs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ curl wget gnupg ca-certificates libnss3 \
     && rm -rf /var/lib/apt/lists/*
 
-# If you need browser for Selenium, enable at build: --build-arg INSTALL_BROWSER=true
-# This installs Chromium and chromedriver on Debian-based slim images (may be adjusted per base image)
-RUN if [ "$INSTALL_BROWSER" = "true" ] ; then \
-            echo "--> Instalando Chromium e dependências" && \
-            apt-get update && apt-get install -y \
-                chromium chromium-driver \
-                fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 \
-                libdrm2 libgbm1 libgtk-3-0 libnspr4 libnss3 libx11-6 libx11-xcb1 libxcb1 \
-                libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 \
-                libxrender1 libxshmfence1 libxss1 libxtst6 libxkbcommon0 libpango-1.0-0 libpangocairo-1.0-0 \
-                libglib2.0-0 \
-            && rm -rf /var/lib/apt/lists/* \
-            && echo "Chromium instalado" ; \
-        else \
-            echo "--> BUILD sem navegador (INSTALL_BROWSER=false)" ; \
-        fi
+RUN echo "--> Instalando Chromium e dependências" && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        chromium chromium-driver \
+        fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 \
+        libdrm2 libgbm1 libgtk-3-0 libnspr4 libnss3 libx11-6 libx11-xcb1 libxcb1 \
+        libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 \
+        libxrender1 libxshmfence1 libxss1 libxtst6 libxkbcommon0 libpango-1.0-0 libpangocairo-1.0-0 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "Chromium instalado"
 
 ENV CHROME_BINARY=/usr/bin/chromium \
         CHROMEDRIVER_PATH=/usr/bin/chromedriver

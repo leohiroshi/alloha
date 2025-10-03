@@ -19,21 +19,51 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class SupabaseClient:
-    """Cliente Supabase com features avançadas"""
-    
+    """Cliente Supabase com features avançadas (lazy init).
+
+    - Não quebra o import caso variáveis não estejam presentes.
+    - Usa ensure_client() para inicialização tardia.
+    """
+
     def __init__(self):
         self.supabase_url = os.getenv("SUPABASE_URL")
         self.supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
-        
+        self.client: Optional[Client] = None
+        self.embedding_model: Optional[SentenceTransformer] = None
+        self.available = False
+        self._init_if_possible(initial=True)
+
+    def _init_if_possible(self, initial: bool = False):
+        if self.available:
+            return
         if not self.supabase_url or not self.supabase_key:
-            raise ValueError("SUPABASE_URL e SUPABASE_SERVICE_KEY devem estar configurados")
-        
-        self.client: Client = create_client(self.supabase_url, self.supabase_key)
-        
-        # Modelo de embeddings
-        self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-        
-        logger.info("✅ Supabase client inicializado")
+            if initial:
+                logger.warning("⚠️ Supabase não configurado no startup (faltando SUPABASE_URL ou SUPABASE_SERVICE_KEY). Inicialização será tentada novamente quando necessário.")
+            return
+        try:
+            self.client = create_client(self.supabase_url, self.supabase_key)
+            # Carregar modelo de embeddings apenas quando realmente necessário
+            self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+            self.available = True
+            logger.info("✅ Supabase client inicializado (lazy)")
+        except Exception as e:
+            logger.error(f"❌ Falha ao inicializar Supabase: {e}")
+
+    def ensure_client(self) -> Optional[Client]:
+        """Garante que o client esteja inicializado, tentando lazy init."""
+        if not self.available:
+            # Recarregar env (caso .env tenha sido carregado depois)
+            self.supabase_url = os.getenv("SUPABASE_URL")
+            self.supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+            self._init_if_possible(initial=False)
+        return self.client
+
+    def require_client(self) -> Client:
+        """Obtém o client ou lança erro claro caso indisponível."""
+        client = self.ensure_client()
+        if not client:
+            raise RuntimeError("Supabase ainda não configurado (defina SUPABASE_URL e SUPABASE_SERVICE_KEY).")
+        return client
     
     # ================================================================
     # PROPERTIES - Busca híbrida avançada
