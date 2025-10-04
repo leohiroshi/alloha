@@ -63,7 +63,7 @@ Instruções: apresente-se na primeira interação, qualifique leads (orçamento
         self.logger = self._setup_logging()
         self.embed_model = SentenceTransformer(EMBED_MODEL_NAME)
         self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-        self.tokenizer = tiktoken.encoding_for_model("gpt-4o-mini")
+        self.tokenizer = tiktoken.encoding_for_model("gpt-4.1-mini")
         
         # OpenAI setup
         if OPENAI_API_KEY:

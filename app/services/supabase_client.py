@@ -76,48 +76,62 @@ class SupabaseClient:
         query_embedding: List[float],
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
-        distance_threshold: float = 1.5
+        similarity_threshold: float = 0.30,
+        query_text: Optional[str] = None,
+        fallback_lexical: bool = True
     ) -> List[Dict[str, Any]]:
         """
-        Busca por similaridade usando pgvector
-        Retorna imóveis mais similares ao embedding da query
+        Busca semântica usando função RPC vector_property_search (pgvector) com fallback opcional.
         
         Args:
-            query_embedding: Embedding da query (384 dimensões para all-MiniLM-L6-v2)
-            limit: Número máximo de resultados
-            filters: Filtros adicionais (preço, tipo, etc)
-            distance_threshold: Threshold de distância (quanto menor, mais similar)
+            query_embedding: Embedding da query (384 dims para all-MiniLM-L6-v2)
+            limit: Número máximo de resultados (match_count na função SQL)
+            filters: Filtros adicionais (aplicados pós-RPC)
+            similarity_threshold: Similaridade mínima (0-1). A função converte internamente.
+            query_text: Texto original da busca (usado para fallback lexical se necessário)
+            fallback_lexical: Se True, tenta ILIKE em title/description quando vetor falha ou retorna vazio
         
         Returns:
-            Lista de dicts com id, property_id, content, metadata, distance
+            Lista de dicts normalizados (campos que a função retornar ou fallback lexical)
         """
         try:
-            
-            result = self.client.rpc(
-                'vector_property_search',
-                {
-                    'query_embedding': query_embedding,
-                    'match_threshold': distance_threshold,
-                    'max_results': limit
-                }
-            ).execute()
-            
-            if not result.data:
-                logger.warning("⚠️ Vector search retornou vazio")
+            params = {
+                'query_embedding': query_embedding,
+                'match_threshold': similarity_threshold,
+                'match_count': limit
+            }
+
+            result = self.client.rpc('vector_property_search', params).execute()
+
+            data = result.data or []
+            if not data:
+                logger.info("⚠️ vector_property_search sem resultados (threshold=%.2f)" % similarity_threshold)
+                # Fallback lexical opcional
+                if fallback_lexical and query_text:
+                    lexical = self._lexical_property_fallback(query_text, limit)
+                    if lexical:
+                        logger.info(f"🔎 Fallback lexical retornou {len(lexical)} resultados")
+                        return lexical
                 return []
-            
-            results = result.data
-            
-            # Aplicar filtros adicionais se fornecidos
+
+            # Aplicar filtros adicionais pós-RPC
             if filters:
-                results = self._apply_metadata_filters(results, filters)
-            
-            logger.info(f"🔍 Vector search retornou {len(results)} resultados")
-            return results
-            
+                data = self._apply_metadata_filters(data, filters)
+
+            logger.info(f"🔍 Vector search retornou {len(data)} resultados (após filtros)")
+            return data
         except Exception as e:
             logger.error(f"❌ Erro no vector_search: {e}")
             logger.warning("⚠️ Verifique se a função vector_property_search existe no Supabase")
+            # Fallback se possível
+            if fallback_lexical and query_text:
+                try:
+                    lexical = self._lexical_property_fallback(query_text, limit)
+                    if lexical:
+                        logger.info(f"🔎 Fallback lexical (erro RPC) retornou {len(lexical)} resultados")
+                        return lexical
+                except Exception as fe:
+                    logger.debug(f"Falha no fallback lexical: {fe}")
             return []
     
     def search_properties(
@@ -746,6 +760,44 @@ class SupabaseClient:
             filtered = [p for p in filtered if p.get('bedrooms', 0) >= filters['bedrooms']]
         
         return filtered
+
+    def _lexical_property_fallback(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Fallback simples usando ILIKE em title / description / ai_analysis.
+        Retorna formato aproximado ao da função vetorial.
+        """
+        try:
+            # Sanitizar query para evitar % consecutivos
+            q = (query or '').strip()
+            if not q:
+                return []
+            pattern = f"%{q[:60]}%"  # limitar tamanho
+
+            # Preferir ai_analysis se existir
+            result = self.client.table('properties') \
+                .select('property_id, title, description, ai_analysis, url, price, bedrooms') \
+                .or_(
+                    f"title.ilike.{pattern},description.ilike.{pattern},ai_analysis.ilike.{pattern}"
+                ) \
+                .limit(limit) \
+                .execute()
+
+            rows = result.data or []
+            normalized = []
+            for r in rows:
+                normalized.append({
+                    'property_id': r.get('property_id'),
+                    'title': r.get('title'),
+                    'description': r.get('ai_analysis') or r.get('description'),
+                    'url': r.get('url'),
+                    'price': r.get('price'),
+                    'bedrooms_int': r.get('bedrooms'),
+                    'similarity': None,  # sem score semântico
+                    'fallback': True
+                })
+            return normalized
+        except Exception as e:
+            logger.debug(f"Falha fallback lexical: {e}")
+            return []
 
     # ================================================================
     # INTERNAL - NORMALIZATION FOR SCRAPED PROPERTIES

@@ -306,6 +306,42 @@ SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache
 -- ====================================================================
 -- FUNCTIONS: Busca híbrida (Vector + Full-text)
 -- ====================================================================
+-- NOTE: Função especializada somente vetorial usada pelo código Python:
+-- DROP FUNCTION IF EXISTS public.vector_property_search(vector, double precision, integer);
+-- CREATE OR REPLACE FUNCTION public.vector_property_search(
+--     query_embedding vector(384),            -- Embedding de consulta (384 dims)
+--     match_threshold double precision DEFAULT 0.30, -- Similaridade mínima (0-1)
+--     match_count integer DEFAULT 10                 -- Número máximo de resultados
+-- )
+-- RETURNS TABLE(
+--     property_id text,
+--     title text,
+--     description text,
+--     url text,
+--     price numeric,
+--     bedrooms_int int,
+--     similarity double precision
+-- ) LANGUAGE plpgsql AS $$
+-- BEGIN
+--   RETURN QUERY
+--   SELECT
+--     p.property_id,
+--     COALESCE(p.title, '(sem título)') AS title,
+--     LEFT(COALESCE(p.ai_analysis, p.description, ''), 600) AS description,
+--     p.url,
+--     p.price,
+--     p.bedrooms AS bedrooms_int,
+--     1 - (p.embedding <#> query_embedding) AS similarity
+--   FROM public.properties p
+--   WHERE p.embedding IS NOT NULL
+--     AND (1 - (p.embedding <#> query_embedding)) >= match_threshold
+--   ORDER BY p.embedding <#> query_embedding
+--   LIMIT match_count;
+-- END;
+-- $$;
+-- IMPORTANTE: Ajustar a coluna properties.embedding para vector(384) antes de criar a função.
+-- IMPORTANTE 2: Código Python chama parâmetros: query_embedding, match_threshold, match_count.
+-- Caso altere nomes/ordem, atualizar supabase_client.vector_search.
 CREATE OR REPLACE FUNCTION hybrid_property_search(
     query_embedding vector(768),
     query_text TEXT,
