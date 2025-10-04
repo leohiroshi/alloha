@@ -7,7 +7,7 @@ import asyncio
 import os
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import aiohttp
 import tempfile
 import base64
@@ -34,6 +34,12 @@ if not logger.hasHandlers():
 
 # RAG endpoint (HTTP fallback, se necessário)
 RAG_ENDPOINT = os.getenv("RAG_ENDPOINT", "http://localhost:8000/query")
+
+# In-memory cache for first names: { phone_hash: (first_name_or_none, expires_epoch) }
+FIRST_NAME_CACHE: Dict[str, tuple[Optional[str], float]] = {}
+FIRST_NAME_CACHE_LOCK = asyncio.Lock()
+FIRST_NAME_CACHE_TTL = int(os.getenv("FIRST_NAME_CACHE_TTL", "3600"))  # seconds
+FIRST_NAME_CACHE_NULL_TTL = int(os.getenv("FIRST_NAME_CACHE_NULL_TTL", "900"))  # shorter TTL for misses
 
 class IntelligentRealEstateBot:
     """Bot inteligente especializado em imóveis"""
@@ -270,19 +276,7 @@ class IntelligentRealEstateBot:
             "Você é Sofia, assistente virtual da Allega Imóveis.\n"
             "Responda de forma concisa, inclua URL e imagem quando disponíveis e ofereça próximos passos.\n"
         )
-        user_display = user_phone
-        try:
-            # Buscar profile agregado (conversa + lead) e extrair nome
-            profile = supabase_client.get_user_profile(user_phone)
-            if profile and profile.get('conversation'):
-                raw_name = profile['conversation'].get('user_name')
-                if raw_name:
-                    # pegar primeiro nome limpo
-                    first = raw_name.strip().split()[0]
-                    if 2 <= len(first) <= 25:
-                        user_display = first
-        except Exception:
-            pass
+        user_display = self._get_first_name(user_phone) or user_phone
         return system + f"\nUsuário ({user_display}): {message}\n"
 
     def _build_image_prompt(self, caption: str, user_phone: str) -> str:
@@ -504,6 +498,11 @@ class IntelligentRealEstateBot:
         lines = ["Algumas opções que encontrei:"]
         for i, prop in enumerate(structured_properties[:max_list], start=1):
             title = (prop.get("title") or f"Imóvel {i}").strip()
+            # Sanitizar tags técnicas como [ANALYSIS], [CONTEXT], etc.
+            if title.startswith("[") and "]" in title.split(" ")[0]:
+                first_token = title.split(" ")[0]
+                if first_token.endswith("]") and len(first_token) < 25:
+                    title = title[len(first_token):].strip(" -:•|\t") or f"Imóvel {i}"
             bairro = prop.get("neighborhood") or ""
             price = prop.get("price") or "Sob consulta"
             bedrooms = prop.get("bedrooms") or "?"
@@ -516,8 +515,6 @@ class IntelligentRealEstateBot:
                 extras.append(f"{bedrooms} qt")
             if price:
                 extras.append(str(price))
-            if extras:
-                part += " - " + " | ".join(extras)
             if url.startswith("http"):
                 part += f"\n{url}"
             lines.append(part)
@@ -766,10 +763,10 @@ class IntelligentRealEstateBot:
 
     async def _process_property_search_and_send(self, user_query: str, user_phone: str, history: List[Dict[str, str]]):
         """
-        Executa busca de imóveis com novo fluxo:
-        1) PRIMEIRO: Buscar imóveis e decidir se deve enviar CTA
-        2) Se vai enviar CTA: envia APENAS o CTA (sem resposta natural)
-        3) Se NÃO vai enviar CTA: envia resposta natural
+        Fluxo de busca de imóveis.
+        MODOS:
+        - Padrão (single CTA ou resposta natural)
+        - Multi CTA (envia intro + até N CTAs separados) controlado por env MULTI_CTA_MODE=1
         """
         try:
             logger.info("Iniciando fluxo de property_search para %s: %s", user_phone, user_query[:120])
@@ -781,18 +778,31 @@ class IntelligentRealEstateBot:
             if not answer or not answer.strip():
                 answer = "Encontrei algumas opções que podem te interessar." if structured_properties else self._handle_no_results()
 
+            multi_mode = os.getenv("MULTI_CTA_MODE", "1") == "1"
+            max_cta = int(os.getenv("MAX_CTA_PER_RESPONSE", "3"))
+
+            # Se multi-mode ativo e temos propriedades -> envia fluxo multi e retorna
+            if multi_mode and structured_properties:
+                await self._send_multi_cta_sequence(user_query, user_phone, structured_properties[:max_cta])
+                return
+
             # 2) Heurística rápida para CTA (antes do custo do LLM adicional)
             quick_cta = False
             uq_lower = (user_query or "").lower()
-            cta_intent_keywords = ["ver detalhes", "link", "manda o link", "me envia o link", "agendar visita", "quero esse", "quero este", "gostei desse"]
+            cta_intent_keywords = [
+                "ver detalhes", "link", "manda o link", "me envia o link", "agendar visita",
+                "quero esse", "quero este", "gostei desse", "gostei dessa", "quero ver",
+                "me passa", "me manda", "qual o valor", "valor desse"
+            ]
+            force_single = os.getenv("ALWAYS_CTA_IF_SINGLE", "1") == "1"
             if structured_properties:
-                if len(structured_properties) == 1 and any(k in uq_lower for k in cta_intent_keywords):
+                if len(structured_properties) == 1 and (force_single or any(k in uq_lower for k in cta_intent_keywords)):
                     quick_cta = True
 
             # 3) Decidir CTA via LLM se heurística não decidiu
             if quick_cta:
                 should_send_cta = True
-                logger.info("CTA heuristic: enforced should_send_cta=True (len(structured_properties)=1 & intent keyword)")
+                logger.info("CTA heuristic: enforced should_send_cta=True (len=%d force_single=%s)", len(structured_properties), force_single)
             else:
                 should_send_cta = await self._should_send_cta(answer, user_query, structured_properties)
 
@@ -882,6 +892,198 @@ class IntelligentRealEstateBot:
                 
         except Exception as e:
             logger.exception("Erro no fluxo property_search: %s", e)
+
+    async def _send_multi_cta_sequence(self, user_query: str, user_phone: str, properties: List[dict]):
+        """Envia mensagem introdutória + até 3 CTAs separados (cada um com seu link)."""
+        if not getattr(self, "whatsapp_service", None):
+            logger.warning("WhatsApp service indisponível para multi CTA")
+            return
+        try:
+            # Intro humanizada
+            first_name = self._get_first_name(user_phone)
+            intro = self._build_intro_message(user_query, properties, first_name)
+            await self.whatsapp_service.send_message(user_phone, intro)
+            await self._persist_property_message(user_phone, intro, meta={
+                "ai": True,
+                "flow": "property_search_intro",
+                "properties_listed": len(properties),
+                "multi_cta": True
+            })
+
+            # Enviar cada CTA
+            for idx, prop in enumerate(properties, start=1):
+                await self._send_single_property_cta(user_phone, prop, idx, len(properties))
+
+        except Exception as e:
+            logger.exception("Erro no envio multi CTA: %s", e)
+
+    def _build_intro_message(self, user_query: str, properties: List[dict], first_name: Optional[str] = None) -> str:
+        qtd = len(properties)
+        lower = user_query.lower()
+        target = "o que você está buscando"
+        if "quarto" in lower:
+            import re
+            m = re.search(r"(\d+)\s*quarto", lower)
+            if m:
+                target = f"{m.group(1)} quartos"
+            else:
+                target = "imóveis"
+        # Não temos phone aqui; ajustaremos chamada externa para passar phone
+        saud = f"Oi{', ' + first_name if first_name else '!'}".rstrip()
+        if saud.endswith(','):
+            saud += '!'
+        return (
+            f"{saud} Que bom ter você aqui! Você busca {target}. "
+            f"Separei {qtd} opção{'s' if qtd>1 else ''} inicial{'s' if qtd>1 else ''} para você:" )
+
+    def _get_first_name(self, user_phone: str) -> Optional[str]:
+        """Busca primeiro nome com cache em memória (TTL). Cache key = md5(phone).
+        Salva tanto hits quanto misses (miss TTL menor)."""
+        import hashlib, time
+        try:
+            phone_norm = (user_phone or '').strip()
+            if not phone_norm:
+                return None
+            phone_hash = hashlib.md5(phone_norm.encode()).hexdigest()
+            now = time.time()
+
+            # 1. Cache hit path (sem lock otimista para leitura rápida)
+            cached = FIRST_NAME_CACHE.get(phone_hash)
+            if cached:
+                name_val, exp = cached
+                if exp > now:
+                    if name_val:
+                        logger.debug(f"FirstNameCache HIT ({phone_hash[:6]}..): {name_val}")
+                        return name_val
+                    else:
+                        logger.debug(f"FirstNameCache HIT-NULL ({phone_hash[:6]}..)")
+                        return None
+                else:
+                    # expirado -> remover lazy
+                    FIRST_NAME_CACHE.pop(phone_hash, None)
+
+            # 2. Cache miss -> resolver
+            profile = supabase_client.get_user_profile(phone_norm)
+            candidates = []
+            if profile:
+                conv = profile.get('conversation') or {}
+                if conv.get('user_name'):
+                    candidates.append(conv['user_name'])
+                if profile.get('user_name'):
+                    candidates.append(profile['user_name'])
+            resolved = None
+            for raw in candidates:
+                if not isinstance(raw, str):
+                    continue
+                first = raw.strip().split()[0]
+                clean = ''.join(ch for ch in first if ch.isalpha())
+                if 2 <= len(clean) <= 25:
+                    resolved = clean.capitalize()
+                    break
+
+            # 3. Escrever no cache (sem await/lock pesado — write simples é ok; se race menor impacto)
+            ttl = FIRST_NAME_CACHE_TTL if resolved else FIRST_NAME_CACHE_NULL_TTL
+            FIRST_NAME_CACHE[phone_hash] = (resolved, now + ttl)
+            logger.debug(f"FirstNameCache SET ({phone_hash[:6]}..) -> {resolved or 'NULL'} ttl={ttl}s")
+            return resolved
+        except Exception as e:
+            logger.debug(f"Name resolution failed (cache path) for {user_phone}: {e}")
+            return None
+
+    def invalidate_first_name_cache(phone_or_hash: str):
+        """Invalidates cached first name by phone (raw) or direct md5 hash (32 hex)."""
+        import hashlib
+        key = phone_or_hash.strip()
+        if not key:
+            return
+        if len(key) != 32 or any(c not in '0123456789abcdef' for c in key.lower()):
+            key = hashlib.md5(key.encode()).hexdigest()
+        removed = FIRST_NAME_CACHE.pop(key, None)
+        if removed:
+            logger.debug(f"FirstNameCache INVALIDATE ({key[:6]}..)")
+
+    async def _send_single_property_cta(self, user_phone: str, prop: dict, index: int, total: int):
+        """Envia um CTA (ou fallback texto) para uma propriedade específica."""
+        if not prop.get("url") or not prop["url"].startswith("http"):
+            # Fallback texto se não tem URL
+            body = self._format_property_fallback_text(prop, index)
+            await self.whatsapp_service.send_message(user_phone, body)
+            await self._persist_property_message(user_phone, body, meta={
+                "ai": True,
+                "flow": "property_search_cta_fallback",
+                "sequence": index,
+                "total": total,
+                "property_id": prop.get("id")
+            })
+            return
+        try:
+            has_method = getattr(self.whatsapp_service, "send_interactive_cta_url", None) is not None
+            body_text = self._short_property_body(prop)
+            if has_method:
+                sent = await self.whatsapp_service.send_interactive_cta_url(
+                    to=user_phone,
+                    image_url=prop.get("main_image"),
+                    body_text=body_text,
+                    button_text=f"Ver detalhes ({index}/{total})",
+                    url=prop["url"],
+                    footer_text="Agende sua visita!"
+                )
+                if not sent:
+                    logger.warning("Falha ao enviar CTA interativo; usando fallback texto")
+                    await self.whatsapp_service.send_message(user_phone, body_text + f"\n{prop['url']}")
+            else:
+                await self.whatsapp_service.send_message(user_phone, body_text + f"\n{prop['url']}")
+            await self._persist_property_message(user_phone, body_text, meta={
+                "ai": True,
+                "flow": "property_search_cta",
+                "sequence": index,
+                "total": total,
+                "property_id": prop.get("id"),
+                "url": prop.get("url")
+            })
+        except Exception as e:
+            logger.exception("Erro CTA property %s: %s", prop.get("id"), e)
+
+    def _short_property_body(self, prop: dict) -> str:
+        title = (prop.get("title") or "Imóvel").strip()
+        price = prop.get("price") or "Preço sob consulta"
+        bairro = prop.get("neighborhood") or ""
+        bedrooms = prop.get("bedrooms") or "?"
+        desc = (prop.get("description") or "").strip()[:160]
+        parts = [title]
+        details = []
+        if bairro:
+            details.append(bairro)
+        if bedrooms and bedrooms != "?":
+            details.append(f"{bedrooms} qt")
+        if price:
+            details.append(str(price))
+        if details:
+            parts.append(" - " + " | ".join(details))
+        if desc:
+            parts.append("\n" + desc)
+        return "".join(parts)
+
+    def _format_property_fallback_text(self, prop: dict, index: int) -> str:
+        return self._short_property_body(prop) + f"\n(Opção {index})"
+
+    async def _persist_property_message(self, user_phone: str, content: str, meta: dict):
+        try:
+            conversation = await asyncio.to_thread(
+                supabase_client.get_or_create_conversation,
+                user_phone
+            )
+            await asyncio.to_thread(
+                supabase_client.save_message,
+                conversation['id'],
+                'sent',
+                content,
+                'text',
+                None,
+                meta
+            )
+        except Exception as e:
+            logger.debug("Falha ao persistir multi CTA message: %s", e)
 
 
     async def _should_send_cta(self, sofia_response: str, user_query: str, structured_properties: list) -> bool:
