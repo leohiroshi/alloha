@@ -3,6 +3,7 @@ Cache FAISS para Embeddings - Reduz Latência de 1.8s para 250ms
 Corta 35% do custo de tokens mantendo vetores em RAM
 """
 import os
+import json
 import numpy as np
 import logging
 from typing import List, Dict, Any, Optional, Tuple
@@ -79,6 +80,26 @@ class EmbeddingCache:
             return np.zeros(self.embedding_dim)
         
         text_hash = self._get_text_hash(text)
+        # Tentar Redis antes (cache distribuído)
+        use_redis = os.getenv("USE_REDIS_EMBED_CACHE", "1") == "1"
+        redis_hit = False
+        if use_redis:
+            try:
+                from . import redis_client
+                client = await redis_client.get_client()
+                if client:
+                    redis_key = f"emb:{self.embedding_dim}:{text_hash}"
+                    cached_vec = await client.get(redis_key)
+                    if cached_vec:
+                        try:
+                            arr = np.array(json.loads(cached_vec), dtype=np.float32)
+                            if arr.shape[0] == self.embedding_dim:
+                                logger.debug(f"Embedding Redis HIT: {text[:50]}...")
+                                return arr
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"Redis embedding cache fallback (get) {e}")
         
         # Verificar cache primeiro
         if use_cache:
@@ -109,6 +130,16 @@ class EmbeddingCache:
             self._add_to_faiss_cache(text_hash, embedding, {"text": text[:100]})
         else:
             self.simple_cache[text_hash] = (embedding, datetime.utcnow())
+        # Armazenar também no Redis (TTL alinhado)
+        if use_redis:
+            try:
+                from . import redis_client
+                client = await redis_client.get_client()
+                if client:
+                    redis_key = f"emb:{self.embedding_dim}:{text_hash}"
+                    await client.set(redis_key, json.dumps(embedding.tolist()), ex=int(self.ttl_hours * 3600))
+            except Exception as e:
+                logger.debug(f"Redis embedding cache fallback (set) {e}")
         
         return embedding
     

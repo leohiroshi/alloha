@@ -34,6 +34,7 @@ sentence-transformers>=2.2.2
 tiktoken>=0.4.0
 faiss-cpu>=1.7.4  # (Mantido apenas se ainda for usado em testes locais; Supabase pgvector é a fonte principal)
 tenacity>=8.2.3  # Retries robustos (usado em rag_pipeline)
+redis>=5.0.0  # Cache distribuído / rate limiting / locks
 
 # Optional helpers
 python-dateutil==2.8.2

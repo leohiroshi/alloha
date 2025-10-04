@@ -107,6 +107,42 @@ Status: Concluída.
 - [x] Dataset incremental ativo
 
 ## 🔒 Observações
+## 🧰 Redis (Opcional)
+Adicionado suporte opcional para Redis como camada de:
+
+- Cache de sessão distribuído das propriedades já mostradas (evita repetir imóveis entre réplicas)
+- Cache simples de embeddings (reduz chamadas repetidas a modelos de embedding)
+- Rate limiting (controle por janela) e locks simples
+
+### Variáveis de Ambiente
+```
+REDIS_URL=redis://localhost:6379/0
+REDIS_PASSWORD=
+REDIS_TLS=0                # 1 para usar rediss://
+USE_REDIS_SESSION_CACHE=1  # desativar = 0
+USE_REDIS_EMBED_CACHE=1    # desativar = 0
+```
+
+### Subir Localmente
+```
+docker run -d --name alloha-redis -p 6379:6379 redis:7-alpine
+```
+
+### Principais Arquivos
+- `app/services/redis_client.py` – inicialização lazy + utilidades (get/set, rate_limit, locks)
+- `app/services/session_cache.py` – agora assíncrono; usa Redis se disponível
+- `app/services/embedding_cache.py` – tenta Redis antes de FAISS / in-memory
+- `app/services/rate_limiter.py` – helper de rate limit
+
+### Fallback
+Se Redis indisponível: continua tudo em memória e logs indicam fallback (`Redis ... fallback`).
+
+### Próximos Passos Sugeridos
+- Métricas de hits/misses
+- Locks distribuídos para backfill
+- Chave de idempotência global para webhooks
+- Monitor TTL dinâmico conforme carga
+
 - Evite expor `SUPABASE_SERVICE_KEY` em clientes públicos.
 - Usar Row Level Security + policies (não incluídas aqui) para produção.
 

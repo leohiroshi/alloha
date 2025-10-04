@@ -188,7 +188,7 @@ Instruções: apresente-se na primeira interação, qualifique leads (orçamento
             # Get shown properties from cache (if phone_hash provided)
             shown_property_ids = []
             if phone_hash:
-                shown_property_ids = session_cache.get_shown_properties(phone_hash)
+                shown_property_ids = await session_cache.get_shown_properties(phone_hash)
                 if shown_property_ids:
                     self.logger.info(f"Cache: {len(shown_property_ids)} properties already shown to {phone_hash[:8]}...")
             
@@ -265,7 +265,7 @@ Instruções: apresente-se na primeira interação, qualifique leads (orçamento
                         final_property_ids.append(prop_id)
                 
                 if final_property_ids:
-                    session_cache.add_shown_properties(phone_hash, final_property_ids)
+                    await session_cache.add_shown_properties(phone_hash, final_property_ids)
                     self.logger.info(f"Cache updated: +{len(final_property_ids)} properties for {phone_hash[:8]}...")
             
             elapsed = time.time() - start_time

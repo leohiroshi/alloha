@@ -478,16 +478,68 @@ class IntelligentRealEstateBot:
         meta = doc_data["meta"]
         text = doc_data["text"]
         
+        price = meta.get("price") or meta.get("valor") or None
+        # Normalização simples de preço se vier somente números
+        try:
+            if price and isinstance(price, (int, float)):
+                price = f"R$ {price:,.0f}".replace(",", ".")
+        except Exception:
+            pass
+
         return {
             "id": doc_data["id"],
-            "title": self._extract_title_from_text(text) or f"Imóvel em {meta.get('neighborhood', 'Curitiba')}",
+            "title": self._extract_title_from_text(text) or f"Imóvel em {meta.get('neighborhood', meta.get('bairro', 'Curitiba'))}",
             "description": text[:200],
             "url": meta.get("url"),
             "main_image": meta.get("main_image") or meta.get("image"),
             "neighborhood": meta.get("neighborhood") or meta.get("bairro"),
-            "price": meta.get("price") or meta.get("valor"),
-            "bedrooms": meta.get("bedrooms") or meta.get("quartos")
+            "price": price or "Sob consulta",
+            "bedrooms": meta.get("bedrooms") or meta.get("quartos") or meta.get("dorms")
         }
+
+    def _build_property_listing(self, structured_properties: list, max_list: int = 5) -> str:
+        """Gera listagem textual curta de imóveis para enviar no WhatsApp quando não houver CTA."""
+        if not structured_properties:
+            return ""
+        lines = ["Algumas opções que encontrei:"]
+        for i, prop in enumerate(structured_properties[:max_list], start=1):
+            title = (prop.get("title") or f"Imóvel {i}").strip()
+            bairro = prop.get("neighborhood") or ""
+            price = prop.get("price") or "Sob consulta"
+            bedrooms = prop.get("bedrooms") or "?"
+            url = prop.get("url") or ""
+            part = f"{i}. {title}"
+            extras = []
+            if bairro:
+                extras.append(bairro)
+            if bedrooms and bedrooms != "?":
+                extras.append(f"{bedrooms} qt")
+            if price:
+                extras.append(str(price))
+            if extras:
+                part += " - " + " | ".join(extras)
+            if url.startswith("http"):
+                part += f"\n{url}"
+            lines.append(part)
+        lines.append("\nSe quiser mais detalhes de alguma delas basta me falar o número ou dizer 'quero a 1', por exemplo.")
+        return "\n\n".join(lines)
+
+    def _augment_answer_with_listing(self, answer: str, structured_properties: list) -> str:
+        """Acrescenta listagem de imóveis à resposta se ela não mencionar explicitamente opções."""
+        if not structured_properties:
+            return answer
+        answer_lower = answer.lower()
+        # Heurística: se já contém 'opção', '1.' ou URL de algum imóvel, não duplicar
+        has_listing = ("opção 1" in answer_lower) or ("1." in answer_lower and any(p.get("title", "").lower()[:10] in answer_lower for p in structured_properties))
+        if not has_listing:
+            listing = self._build_property_listing(structured_properties)
+            # Limite aproximado (WhatsApp geralmente suporta > 4000, manter seguro)
+            combined = (answer.strip() + "\n\n" + listing).strip()
+            if len(combined) > 3800:
+                # Truncar para segurança mantendo começo
+                combined = combined[:3800] + "..."
+            return combined
+        return answer
 
 
     async def _generate_natural_response(self, user_query: str, normalized_hits: list) -> str:
@@ -722,14 +774,40 @@ class IntelligentRealEstateBot:
         try:
             logger.info("Iniciando fluxo de property_search para %s: %s", user_phone, user_query[:120])
             
-            # 1) PRIMEIRO: Buscar imóveis e gerar resposta natural (COM CACHE!)
+            # 1) Buscar imóveis e gerar resposta natural (COM CACHE!)
             answer, structured_properties = await self.process_property_search(user_query, phone_number=user_phone)
-            
-            if not answer:
-                answer = "Desculpe, não encontrei imóveis com essas características no momento."
 
-            # 2) DECIDIR se deve enviar CTA baseado na resposta da Sofia
-            should_send_cta = await self._should_send_cta(answer, user_query, structured_properties)
+            original_answer = answer or ""
+            if not answer or not answer.strip():
+                answer = "Encontrei algumas opções que podem te interessar." if structured_properties else self._handle_no_results()
+
+            # 2) Heurística rápida para CTA (antes do custo do LLM adicional)
+            quick_cta = False
+            uq_lower = (user_query or "").lower()
+            cta_intent_keywords = ["ver detalhes", "link", "manda o link", "me envia o link", "agendar visita", "quero esse", "quero este", "gostei desse"]
+            if structured_properties:
+                if len(structured_properties) == 1 and any(k in uq_lower for k in cta_intent_keywords):
+                    quick_cta = True
+
+            # 3) Decidir CTA via LLM se heurística não decidiu
+            if quick_cta:
+                should_send_cta = True
+                logger.info("CTA heuristic: enforced should_send_cta=True (len(structured_properties)=1 & intent keyword)")
+            else:
+                should_send_cta = await self._should_send_cta(answer, user_query, structured_properties)
+
+            # 4) Se NÃO for CTA, enriquecer resposta com listagem textual de imóveis (garante visibilidade)
+            if not should_send_cta and structured_properties:
+                answer = self._augment_answer_with_listing(answer, structured_properties)
+
+            # Métricas diagnósticas
+            try:
+                logger.info(
+                    "PropertySearchDiag | props=%d | cta_decision=%s | quick_cta=%s | answer_chars=%d | original_changed=%s", 
+                    len(structured_properties), should_send_cta, quick_cta, len(answer or ""), answer != original_answer
+                )
+            except Exception:
+                pass
             
             cta_sent = False
             if should_send_cta and structured_properties and getattr(self, "whatsapp_service", None):
@@ -770,6 +848,8 @@ class IntelligentRealEstateBot:
             # 3) Se NÃO enviou CTA, envia resposta natural da Sofia
             if not cta_sent and getattr(self, "whatsapp_service", None):
                 try:
+                    if not answer or not answer.strip():  # última salvaguarda
+                        answer = self._handle_no_results()
                     await self.whatsapp_service.send_message(user_phone, answer)
                     logger.info("Resposta da Sofia enviada com sucesso")
                 except Exception:
