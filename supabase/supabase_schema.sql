@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS properties (
     source TEXT, -- sciensa, sincroniza_imoveis, manual
     external_id TEXT,
     last_sync_at TIMESTAMPTZ,
-    embedding vector(768), -- Embedding para busca semântica
+    embedding vector(1536), -- Embedding para busca semântica (OpenAI text-embedding-3-small)
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -41,7 +41,7 @@ CREATE INDEX idx_properties_price ON properties(price);
 CREATE INDEX idx_properties_status ON properties(status);
 CREATE INDEX idx_properties_type ON properties(property_type);
 CREATE INDEX idx_properties_created ON properties(created_at DESC);
-CREATE INDEX idx_properties_embedding ON properties USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX idx_properties_embedding ON properties USING ivfflat (embedding vector_cosine_ops) WITH (lists = 200); -- lists maior para melhor recall em 1536 dims
 CREATE INDEX idx_properties_fulltext ON properties USING gin(to_tsvector('portuguese', title || ' ' || COALESCE(description, '')));
 
 -- ====================================================================
@@ -216,8 +216,8 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     text_hash TEXT UNIQUE NOT NULL,
     text_content TEXT NOT NULL,
-    embedding vector(768),
-    model TEXT DEFAULT 'all-MiniLM-L6-v2',
+    embedding vector(1536),
+    model TEXT DEFAULT 'text-embedding-3-small',
     hit_count INTEGER DEFAULT 0,
     last_hit_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ,
@@ -306,10 +306,10 @@ SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache
 -- ====================================================================
 -- FUNCTIONS: Busca híbrida (Vector + Full-text)
 -- ====================================================================
--- NOTE: Função especializada somente vetorial usada pelo código Python:
+-- NOTE: Função especializada somente vetorial (OpenAI 1536 dims) usada pelo código Python:
 -- DROP FUNCTION IF EXISTS public.vector_property_search(vector, double precision, integer);
 -- CREATE OR REPLACE FUNCTION public.vector_property_search(
---     query_embedding vector(384),            -- Embedding de consulta (384 dims)
+--     query_embedding vector(1536),            -- Embedding de consulta (1536 dims OpenAI)
 --     match_threshold double precision DEFAULT 0.30, -- Similaridade mínima (0-1)
 --     match_count integer DEFAULT 10                 -- Número máximo de resultados
 -- )
@@ -339,11 +339,9 @@ SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache
 --   LIMIT match_count;
 -- END;
 -- $$;
--- IMPORTANTE: Ajustar a coluna properties.embedding para vector(384) antes de criar a função.
--- IMPORTANTE 2: Código Python chama parâmetros: query_embedding, match_threshold, match_count.
--- Caso altere nomes/ordem, atualizar supabase_client.vector_search.
+-- Código Python chama parâmetros: query_embedding, match_threshold, match_count.
 CREATE OR REPLACE FUNCTION hybrid_property_search(
-    query_embedding vector(768),
+    query_embedding vector(1536),
     query_text TEXT,
     match_threshold FLOAT DEFAULT 0.7,
     max_results INTEGER DEFAULT 10

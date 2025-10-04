@@ -1,4 +1,4 @@
-"""Backfill de embeddings para propriedades sem vetor.
+"""Backfill/Rebuild de embeddings para propriedades sem vetor ou com dimensão incorreta.
 
 Uso:
   python scripts/backfill_property_embeddings.py
@@ -9,8 +9,8 @@ Flags via env:
   USE_OPENAI_EMBEDDINGS=1  # (já aproveita mesma flag do rag_pipeline) se quiser usar OpenAI
 
 Requisitos:
-  - Coluna properties.embedding deve ser vector(384)
-  - Modelo local: sentence-transformers/all-MiniLM-L6-v2
+    - Coluna properties.embedding agora vector(1536) se migrado para OpenAI
+    - Modelo OpenAI: text-embedding-3-small (1536) OU fallback local all-MiniLM-L6-v2 (384 padded)
   - SUPABASE_URL / SUPABASE_SERVICE_KEY definidos
 
 Estratégia:
@@ -39,29 +39,43 @@ if str(ROOT) not in sys.path:
 
 from app.services.supabase_client import supabase_client
 
-EXPECTED_DIM = 384
+USE_OPENAI = os.getenv("USE_OPENAI_EMBEDDINGS", "1") == "1"  # herdado da stack
+EXPECTED_DIM = 1536 if USE_OPENAI else 384
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
-USE_OPENAI = os.getenv("USE_OPENAI_EMBEDDINGS", "0") == "1"  # respeita flag global, mas aqui default 0
+REPROCESS_WRONG_DIM = os.getenv("REPROCESS_WRONG_DIM", "1") == "1"  # reprocessar vetores com dimensão divergente
 
 def _load_model() -> SentenceTransformer:
+    supabase_client.ensure_client()
     if supabase_client.embedding_model:
         return supabase_client.embedding_model
-    # Garantir lazy init do client (env já carregado)
-    supabase_client.ensure_client()
-    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')  # fallback local 384
     supabase_client.embedding_model = model
     return model
 
 def _fetch_batch_missing() -> List[Dict]:
-    # Buscar campos necessários + id para permitir update direto sem reinserir título nulo
-    resp = supabase_client.client.table('properties') \
-        .select('id, property_id, title, description') \
-        .is_('embedding', 'null') \
-        .limit(BATCH_SIZE) \
-        .execute()
-    rows = resp.data or []
-    # Garantir fallback de título (NOT NULL) caso registros legados tenham vindo quebrados
+    base = supabase_client.client.table('properties') \
+        .select('id, property_id, title, description')
+
+    # Filtro principal: embeddings ausentes
+    query = base.is_('embedding', 'null')
+
+    # Opcional: também pegar registros com dimensão divergente (Postgres não expõe vector_dims nativamente via client python)
+    # Estratégia: segundo passo se não houver NULLs, buscar um pequeno conjunto e checar comprimento via retorno em lote.
+    rows = query.limit(BATCH_SIZE).execute().data or []
+    if not rows and REPROCESS_WRONG_DIM:
+        # Buscar alguns registros para inspeção (heurística: pegar primeiros 200 com embedding não nulo e medir)
+        probe = supabase_client.client.table('properties') \
+            .select('id, property_id, title, description, embedding') \
+            .limit(BATCH_SIZE) \
+            .execute().data or []
+        wrong = []
+        for r in probe:
+            emb = r.get('embedding')
+            if isinstance(emb, list) and len(emb) != EXPECTED_DIM:
+                wrong.append({k: r.get(k) for k in ('id','property_id','title','description')})
+        rows = wrong
+
     for r in rows:
         if not r.get('title'):
             r['title'] = f"Imóvel {r.get('property_id','sem-id')}"
@@ -80,8 +94,8 @@ def main():
     processed = 0
     loops = 0
 
-    print(f"== Backfill embeddings (dim={EXPECTED_DIM}) ==")
-    print(f"Batch size: {BATCH_SIZE} | Dry-run: {DRY_RUN}")
+    print(f"== Backfill embeddings (expected_dim={EXPECTED_DIM}, openai={USE_OPENAI}) ==")
+    print(f"Batch size: {BATCH_SIZE} | Dry-run: {DRY_RUN} | Reprocess wrong dim: {REPROCESS_WRONG_DIM}")
 
     while True:
         loops += 1
@@ -94,10 +108,37 @@ def main():
         # Evitar strings vazias (substituir por ID para estabilidade mínima)
         texts = [t if t else row.get('property_id', '') for t, row in zip(texts, batch)]
 
-        embeddings = model.encode(texts, show_progress_bar=False, convert_to_numpy=True).tolist()
-        # Sanity check dimensão
-        if any(len(vec) != EXPECTED_DIM for vec in embeddings):
-            raise RuntimeError("Dimensão inesperada de embedding gerada – ajuste EXPECTED_DIM ou modelo.")
+        # Gerar embeddings: se OpenAI ativo e cliente disponível usar supabase_client._generate_embedding (1 a 1 para manejar exceções/padding)
+        embeddings: List[List[float]] = []
+        if USE_OPENAI and getattr(supabase_client, 'openai_client', None):
+            gen = getattr(supabase_client, '_generate_embedding', None)
+            if callable(gen):
+                for text in texts:
+                    vec = gen(text)
+                    if not vec:
+                        # fallback local manual
+                        local_vec = model.encode([text])[0].tolist()
+                        if len(local_vec) < EXPECTED_DIM:
+                            local_vec.extend([0.0]*(EXPECTED_DIM-len(local_vec)))
+                        elif len(local_vec) > EXPECTED_DIM:
+                            local_vec = local_vec[:EXPECTED_DIM]
+                        vec = local_vec
+                    embeddings.append(vec)
+            else:
+                # fallback para encode em lote local + padding
+                local_batch = model.encode(texts, show_progress_bar=False, convert_to_numpy=True).tolist()
+                for lb in local_batch:
+                    if len(lb) < EXPECTED_DIM:
+                        lb.extend([0.0]*(EXPECTED_DIM-len(lb)))
+                    elif len(lb) > EXPECTED_DIM:
+                        lb = lb[:EXPECTED_DIM]
+                    embeddings.append(lb)
+        else:
+            # Modo somente local (dim 384 ou schema legado)
+            embeddings = model.encode(texts, show_progress_bar=False, convert_to_numpy=True).tolist()
+            # Validar dimensão
+            if any(len(vec) != EXPECTED_DIM for vec in embeddings):
+                raise RuntimeError("Dimensão inesperada de embedding gerada – ajuste EXPECTED_DIM ou modelo.")
 
         updates = []
         timestamp = datetime.utcnow().isoformat()

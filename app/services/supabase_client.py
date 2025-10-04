@@ -13,6 +13,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from sentence_transformers import SentenceTransformer
+import openai
 import numpy as np
 
 # Carregar variáveis de ambiente
@@ -33,6 +34,12 @@ class SupabaseClient:
         self.client: Optional[Client] = None
         self.embedding_model: Optional[SentenceTransformer] = None
         self.available = False
+        # Embeddings sempre 1536 (schema vector(1536)); OpenAI preferencial com fallback local padded
+        self.use_openai_embeddings = True  # sempre tentar OpenAI primeiro
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.openai_embed_model = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+        self.openai_embed_dim = 1536  # modelo text-embedding-3-small
+        self.openai_client = None
         self._init_if_possible(initial=True)
 
     def _init_if_possible(self, initial: bool = False):
@@ -44,8 +51,17 @@ class SupabaseClient:
             return
         try:
             self.client = create_client(self.supabase_url, self.supabase_key)
-            # Carregar modelo de embeddings apenas quando realmente necessário
-            self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+            # Carregar modelo local sempre (serve como fallback / modo offline)
+            self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')  # 384 dims
+            if self.openai_api_key:
+                try:
+                    self.openai_client = openai.OpenAI(api_key=self.openai_api_key, timeout=30)
+                    logger.info("✅ OpenAI embeddings habilitados (modelo %s)" % self.openai_embed_model)
+                except Exception as oe:
+                    logger.warning(f"⚠️ Falha ao inicializar cliente OpenAI: {oe} — fallback local")
+                    self.openai_client = None
+            else:
+                logger.warning("⚠️ OPENAI_API_KEY ausente — usando apenas modelo local (padding 384→1536)")
             self.available = True
             logger.info("✅ Supabase client inicializado (lazy)")
         except Exception as e:
@@ -145,8 +161,8 @@ class SupabaseClient:
         70% weight em semantic, 30% em keyword matching
         """
         try:
-            # Gerar embedding da query
-            query_embedding = self.embedding_model.encode(query).tolist()
+            # Gerar embedding da query (1536 com fallback local padded)
+            query_embedding = self._generate_embedding(query[:2000]) or []
             
             # Executar busca híbrida usando função SQL
             result = self.client.rpc(
@@ -196,10 +212,11 @@ class SupabaseClient:
             if not prepared:
                 return None
 
-            # Gerar embedding da descrição para busca semântica
-            text_for_embedding = f"{prepared.get('title', '')} {prepared.get('description', '')}".strip()
-            embedding = self.embedding_model.encode(text_for_embedding).tolist()
-            prepared['embedding'] = embedding
+            # Gerar embedding (preferencial OpenAI 1536 -> fallback local 384 padded)
+            text_for_embedding = f"{prepared.get('title', '')} {prepared.get('description', '')}".strip()[:4000]
+            embedding = self._generate_embedding(text_for_embedding)
+            if embedding is not None:
+                prepared['embedding'] = embedding
             prepared['updated_at'] = datetime.utcnow().isoformat()
 
             logger.debug(f"Upsert property_id={prepared.get('property_id')} source={prepared.get('source')}")
@@ -257,7 +274,7 @@ class SupabaseClient:
             
             result = self.client.table('conversations')\
                 .insert(new_conversation)\
-                .execute()
+                    .execute()
             
             logger.info(f"✅ Nova conversa criada: {phone_number}")
             return result.data[0]
@@ -610,7 +627,7 @@ class SupabaseClient:
                 'text_hash': text_hash,
                 'text_content': text[:500],  # Limitar tamanho
                 'embedding': embedding.tolist(),
-                'model': 'all-MiniLM-L6-v2',
+                'model': self.openai_embed_model if (self.use_openai_embeddings and self.openai_client) else 'all-MiniLM-L6-v2',
                 'hit_count': 0,
                 'expires_at': (datetime.utcnow() + timedelta(days=ttl_days)).isoformat(),
                 'created_at': datetime.utcnow().isoformat()
@@ -882,6 +899,49 @@ class SupabaseClient:
             logger.error("Registro sem property_id após normalização – descartando")
             return None
         return prepared
+
+    # ================================================================
+    # INTERNAL - EMBEDDING GENERATION (OpenAI + fallback)
+    # ================================================================
+    def _generate_embedding(self, text: str) -> Optional[List[float]]:
+        """Gera embedding para texto.
+
+        Estratégia:
+          1. Se OpenAI habilitado e cliente disponível -> tenta gerar 1536 dims.
+          2. Em falha -> fallback local 384 dims com zero-padding até 1536 (quando em modo OpenAI).
+          3. Se OpenAI desabilitado -> só local.
+        """
+        if not text:
+            return None
+
+        try:
+            if self.use_openai_embeddings and self.openai_client:
+                try:
+                    resp = self.openai_client.embeddings.create(
+                        model=self.openai_embed_model,
+                        input=[text]
+                    )
+                    vec = resp.data[0].embedding
+                    if len(vec) != self.openai_embed_dim:
+                        raise ValueError(f"Dimensão retornada {len(vec)} != {self.openai_embed_dim}")
+                    return vec
+                except Exception as oe:
+                    logger.warning(f"Falha OpenAI embedding: {oe} — fallback local")
+                    # continua para fallback
+
+            # Local encode
+            local_vec = self.embedding_model.encode([text])[0].tolist()
+            # Padding se modo OpenAI ativo (schema 1536) mas fallback 384
+            if self.use_openai_embeddings:
+                if len(local_vec) < self.openai_embed_dim:
+                    diff = self.openai_embed_dim - len(local_vec)
+                    local_vec.extend([0.0] * diff)
+                elif len(local_vec) > self.openai_embed_dim:
+                    local_vec = local_vec[:self.openai_embed_dim]
+            return local_vec
+        except Exception as e:
+            logger.error(f"❌ Erro ao gerar embedding: {e}")
+            return None
 
 # Singleton instance
 supabase_client = SupabaseClient()

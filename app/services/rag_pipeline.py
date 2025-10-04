@@ -25,9 +25,13 @@ from app.services.session_cache import session_cache
 
 # ---------- CONFIG ----------
 # Embedding config
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
-OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-USE_OPENAI_EMBEDDINGS = os.getenv("USE_OPENAI_EMBEDDINGS", "1") == "1"
+EMBED_MODEL_NAME = "all-MiniLM-L6-v2"  # 384 dimensões (modelo local)
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"  # 1536 dimensões (OpenAI)
+OPENAI_EMBED_DIM = 1536
+
+# Forçar sempre 1536 (independente de variáveis de ambiente) para manter consistência com schema vector(1536)
+PROPERTY_EMBED_DIM = OPENAI_EMBED_DIM
+USE_OPENAI_EMBEDDINGS = True  # Mantemos True para acionar caminho OpenAI/padding; se chave faltar, cai em fallback local padded.
 
 # Retrieval config
 TOP_K = 10
@@ -62,6 +66,7 @@ Instruções: apresente-se na primeira interação, qualifique leads (orçamento
         
         self.logger = self._setup_logging()
         self.embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+        self.force_local_embeddings = False
         self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
         self.tokenizer = tiktoken.encoding_for_model("gpt-4.1-mini")
         
@@ -95,19 +100,57 @@ Instruções: apresente-se na primeira interação, qualifique leads (orçamento
         return text
     
     async def _encode_texts(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings using OpenAI or local model"""
-        if USE_OPENAI_EMBEDDINGS and self.openai_client:
-            try:
-                response = self.openai_client.embeddings.create(
-                    input=texts,
-                    model=OPENAI_EMBEDDING_MODEL
+        """Gera embeddings garantindo dimensão PROPERTY_EMBED_DIM.
+
+        Quando OpenAI está habilitado:
+          - Tenta gerar embeddings 1536-dim (text-embedding-3-small).
+          - Em falha (timeout, quota, rede) faz fallback local 384-dim com zero-padding até 1536.
+        Em modo local:
+          - Usa SentenceTransformer (384) diretamente.
+        """
+        if not texts:
+            return []
+
+        # Caminho OpenAI (dim 1536)
+        if USE_OPENAI_EMBEDDINGS:
+            if not self.openai_client:
+                self.logger.error("USE_OPENAI_EMBEDDINGS=1 mas cliente OpenAI não está configurado — verifique OPENAI_API_KEY")
+            else:
+                try:
+                    response = self.openai_client.embeddings.create(
+                        input=texts,
+                        model=OPENAI_EMBEDDING_MODEL
+                    )
+                    vectors = [item.embedding for item in response.data]
+                    if vectors and len(vectors[0]) != PROPERTY_EMBED_DIM:
+                        raise ValueError(f"Embedding OpenAI retornou dimensão {len(vectors[0])} != {PROPERTY_EMBED_DIM}")
+                    return vectors
+                except Exception as e:
+                    self.logger.warning(f"Falha OpenAI embeddings: {e} — fallback local com padding")
+
+            # Fallback local -> pad para 1536
+            local_vectors = self.embed_model.encode(texts, convert_to_numpy=True, show_progress_bar=False).tolist()
+            if local_vectors and len(local_vectors[0]) != PROPERTY_EMBED_DIM:
+                src_dim = len(local_vectors[0])
+                if src_dim > PROPERTY_EMBED_DIM:
+                    self.logger.error(f"Fallback local produziu dimensão {src_dim} > {PROPERTY_EMBED_DIM} — truncando")
+                    padded = [v[:PROPERTY_EMBED_DIM] for v in local_vectors]
+                else:
+                    # Zero padding
+                    diff = PROPERTY_EMBED_DIM - src_dim
+                    padded = [v + [0.0] * diff for v in local_vectors]
+                return padded
+            return local_vectors
+
+        # Caminho somente local (PROPERTY_EMBED_DIM deve ser 384)
+        local_vectors = self.embed_model.encode(texts, convert_to_numpy=True, show_progress_bar=False).tolist()
+        if local_vectors and len(local_vectors[0]) != PROPERTY_EMBED_DIM:
+            self.logger.warning(
+                "Dimensão local %d diferente de PROPERTY_EMBED_DIM=%d (ajuste esperado se schema mudou)." % (
+                    len(local_vectors[0]), PROPERTY_EMBED_DIM
                 )
-                return [item.embedding for item in response.data]
-            except Exception as e:
-                self.logger.warning(f"OpenAI embeddings failed, fallback to local: {e}")
-        
-        # Fallback to local embeddings
-        return self.embed_model.encode(texts, convert_to_numpy=True, show_progress_bar=False).tolist()
+            )
+        return local_vectors
     
     def _rerank_results(self, query: str, results: List[RetrievalResult]) -> List[RetrievalResult]:
         """Rerank results using cross-encoder"""
@@ -168,22 +211,41 @@ Instruções: apresente-se na primeira interação, qualifique leads (orçamento
             
             for result in results:
                 property_id = result.get("property_id")
-                
-                # Skip if already shown to this user (SESSION CACHE FILTER)
+
+                # Filtro de sessão (já mostrado)
                 if phone_hash and property_id and property_id in shown_property_ids:
                     self.logger.debug(f"Skipping property {property_id} - already shown")
                     continue
-                
-                # Create retrieval result
+
+                # Normalização de campos conforme saída atual da função RPC ou fallback lexical
+                # RPC fields: property_id, title, description, url, price, bedrooms_int, similarity
+                # Fallback lexical: property_id, title, description, url, price, bedrooms_int, similarity=None, fallback=True
+                similarity = result.get("similarity")
+                if similarity is None:
+                    # atribuir score neutro baixo para ordenar no fim
+                    similarity_score = 0.10
+                else:
+                    similarity_score = float(similarity)
+
+                # Montar metadados mínimos
+                meta = {
+                    "property_id": property_id,
+                    "title": result.get("title"),
+                    "url": result.get("url"),
+                    "price": result.get("price"),
+                    "bedrooms": result.get("bedrooms_int"),
+                    "fallback": result.get("fallback", False)
+                }
+
+                text_snippet = result.get("description") or result.get("title") or ""
                 retrieval_result = RetrievalResult(
-                    id=result.get("id", "unknown"),
-                    text=result.get("content", ""),
-                    metadata=result.get("metadata", {}),
-                    score=1.0 - result.get("distance", 1.0)  # Convert distance to similarity
+                    id=property_id or result.get("id", "unknown"),
+                    text=text_snippet,
+                    metadata=meta,
+                    score=similarity_score
                 )
                 retrieval_results.append(retrieval_result)
-                
-                # Track property ID for cache update
+
                 if property_id:
                     new_property_ids.append(property_id)
             
