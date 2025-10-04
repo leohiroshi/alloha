@@ -292,7 +292,23 @@ async def process_whatsapp_message(webhook_data):
             return
         
         message = value["messages"][0]
+        # Tentativa de extrair nome de exibição (profile.name) do remetente
+        profile_name = None
+        try:
+            # Estrutura comum: value -> contacts -> [{profile: {name: ...}, wa_id: ...}]
+            contacts = value.get("contacts", [])
+            if contacts:
+                prof = contacts[0].get("profile") or {}
+                profile_name = prof.get("name")
+        except Exception:
+            profile_name = None
         from_number = message["from"]
+        # Persistir nome se disponível (não bloqueia fluxo)
+        if profile_name:
+            try:
+                await asyncio.to_thread(supabase_client.set_user_name, from_number, profile_name)
+            except Exception:
+                logger.debug("Falha ao salvar user_name para %s", from_number)
         message_id = message.get("id")
         message_type = message.get("type", "text")
         

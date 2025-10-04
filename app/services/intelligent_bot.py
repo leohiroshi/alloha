@@ -270,7 +270,20 @@ class IntelligentRealEstateBot:
             "Você é Sofia, assistente virtual da Allega Imóveis.\n"
             "Responda de forma concisa, inclua URL e imagem quando disponíveis e ofereça próximos passos.\n"
         )
-        return system + f"\nUsuário ({user_phone}): {message}\n"
+        user_display = user_phone
+        try:
+            # Buscar profile agregado (conversa + lead) e extrair nome
+            profile = supabase_client.get_user_profile(user_phone)
+            if profile and profile.get('conversation'):
+                raw_name = profile['conversation'].get('user_name')
+                if raw_name:
+                    # pegar primeiro nome limpo
+                    first = raw_name.strip().split()[0]
+                    if 2 <= len(first) <= 25:
+                        user_display = first
+        except Exception:
+            pass
+        return system + f"\nUsuário ({user_display}): {message}\n"
 
     def _build_image_prompt(self, caption: str, user_phone: str) -> str:
         """Constrói prompt específico para análise de imagens"""

@@ -92,30 +92,6 @@ class SupabaseClient:
             Lista de dicts com id, property_id, content, metadata, distance
         """
         try:
-            # Usar função RPC para busca vetorial
-            # Isso assume que existe uma função no Supabase:
-            # CREATE OR REPLACE FUNCTION vector_property_search(
-            #   query_embedding vector(384),
-            #   match_threshold float,
-            #   max_results int
-            # )
-            # RETURNS TABLE (id uuid, property_id text, content text, metadata jsonb, distance float)
-            # LANGUAGE plpgsql
-            # AS $$
-            # BEGIN
-            #   RETURN QUERY
-            #   SELECT 
-            #     pe.id,
-            #     pe.property_id,
-            #     pe.content,
-            #     pe.metadata,
-            #     (pe.embedding <-> query_embedding) AS distance
-            #   FROM property_embeddings pe
-            #   WHERE (pe.embedding <-> query_embedding) < match_threshold
-            #   ORDER BY distance
-            #   LIMIT max_results;
-            # END;
-            # $$;
             
             result = self.client.rpc(
                 'vector_property_search',
@@ -275,6 +251,42 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"❌ Erro em get_or_create_conversation: {e}")
             raise
+
+    def set_user_name(self, phone_number: str, user_name: str) -> bool:
+        """Define ou atualiza o user_name da conversa associada ao número.
+        Cria a conversa se ainda não existir.
+        """
+        try:
+            if not user_name or not user_name.strip():
+                return False
+            user_name = user_name.strip()[:120]
+            result = self.client.table('conversations')\
+                .select('id, user_name')\
+                .eq('phone_number', phone_number)\
+                .limit(1)\
+                .execute()
+            if result.data:
+                conv = result.data[0]
+                if conv.get('user_name') != user_name:
+                    self.client.table('conversations')\
+                        .update({'user_name': user_name, 'updated_at': datetime.utcnow().isoformat()})\
+                        .eq('id', conv['id'])\
+                        .execute()
+                return True
+            # criar\atualizar
+            new_conv = {
+                'phone_number': phone_number,
+                'user_name': user_name,
+                'state': 'pending',
+                'urgency_score': 1,
+                'last_message_at': datetime.utcnow().isoformat(),
+                'created_at': datetime.utcnow().isoformat()
+            }
+            self.client.table('conversations').insert(new_conv).execute()
+            return True
+        except Exception as e:
+            logger.debug(f"Falha ao definir user_name para {phone_number}: {e}")
+            return False
 
     def get_user_profile(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """Recupera dados agregados do usuário (conversa + lead)."""
