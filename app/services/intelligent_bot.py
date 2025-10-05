@@ -143,6 +143,12 @@ class IntelligentRealEstateBot:
             # 5) Se for busca por imóvel, dispare tarefa específica de busca+envio.
             #    Assim garantimos que process_property_search seja chamado.
             if await self._is_property_search(message):
+                # Enviar saudação personalizada se aplicável (antes do fluxo principal)
+                try:
+                    if await self._should_send_greeting(user_phone):
+                        await self._send_personalized_greeting(user_phone, message)
+                except Exception:
+                    logger.debug("Falha ao enviar saudação personalizada (ignorado)")
                 logger.info("Mensagem identificada como busca de imóvel — iniciando fluxo de property_search em background.")
                 asyncio.create_task(self._process_property_search_and_send(message, user_phone, history))
             else:
@@ -248,6 +254,79 @@ class IntelligentRealEstateBot:
                 )
             except Exception:
                 logger.debug("Falha ao persistir mensagem de erro.")
+
+    async def _should_send_greeting(self, user_phone: str) -> bool:
+        """Decide se deve enviar saudação personalizada agora.
+        Regras:
+        - Apenas se GREETING_ENABLED != '0'
+        - Apenas se conversa tem <=1 mensagens enviadas pelo bot
+        - Evita enviar novamente se já marcamos meta greeting_sent
+        """
+        if os.getenv('GREETING_ENABLED', '1') == '0':
+            return False
+        try:
+            # Buscar conversa + últimas mensagens (pequeno) em thread
+            conversation = await asyncio.to_thread(
+                supabase_client.get_or_create_conversation,
+                user_phone
+            )
+            conv_id = conversation['id']
+            msgs = await asyncio.to_thread(
+                supabase_client.get_conversation_messages,
+                conv_id,
+                12
+            )
+            bot_sent = [m for m in msgs if m.get('direction') == 'sent']
+            # Checar se já enviamos saudação (metadado não implementado ainda -> inferir por padrão de texto)
+            already_greeted = any('sou a sofia' in (m.get('content','').lower()) for m in bot_sent)
+            return (len(bot_sent) <= 1) and not already_greeted
+        except Exception as e:
+            logger.debug(f"Falha em _should_send_greeting: {e}")
+            return False
+
+    async def _send_personalized_greeting(self, user_phone: str, user_message: str):
+        """Envia saudação inicial com primeiro nome identificado ou genérico."""
+        try:
+            first_name = self._get_first_name(user_phone) or ''
+            # Tentar inferir transação (aluguel x venda) se usuário mencionou
+            lower = (user_message or '').lower()
+            hinted = None
+            if 'alugar' in lower or 'aluguel' in lower or 'loca' in lower:
+                hinted = 'alugar'
+            elif 'comprar' in lower or 'compra' in lower or 'venda' in lower:
+                hinted = 'comprar'
+            name_part = f"Olá {first_name}, " if first_name else "Olá, "
+            base = (
+                f"{name_part}sou a Sofia da Allega Imóveis e vou te ajudar a encontrar seu imóvel."
+            )
+            if hinted == 'alugar':
+                base += " Está buscando para alugar mesmo ou também consideraria comprar?"
+            elif hinted == 'comprar':
+                base += " Confirma que é para compra ou também avalia locação?"
+            else:
+                base += " Seria para alugar ou comprar?"
+            # Enviar sem bloquear o fluxo principal (mas aguardar envio para não cruzar com CTAs imediatamente)
+            if getattr(self, 'whatsapp_service', None):
+                await self.whatsapp_service.send_message(user_phone, base)
+                # Persistir
+                try:
+                    conversation = await asyncio.to_thread(
+                        supabase_client.get_or_create_conversation,
+                        user_phone
+                    )
+                    await asyncio.to_thread(
+                        supabase_client.save_message,
+                        conversation['id'],
+                        'sent',
+                        base,
+                        'text',
+                        None,
+                        {"ai": True, "greeting": True}
+                    )
+                except Exception:
+                    logger.debug("Falha ao persistir greeting.")
+        except Exception as e:
+            logger.debug(f"Erro ao enviar greeting: {e}")
 
     async def process_image_message(self, image_data: bytes, caption: str, user_phone: str) -> str:
         try:
@@ -429,11 +508,16 @@ class IntelligentRealEstateBot:
             doc_data = self._extract_document_data(doc, idx)
             normalized_hits.append(doc_data)
             
-            # Se tem URL válida, adicionar à lista estruturada
-            if self._is_valid_property_url(doc_data["meta"].get("url")):
-                structured_property = self._create_structured_property(doc_data, idx)
-                structured_properties.append(structured_property)
+            # Construir structured_property mesmo sem URL para permitir listagem/CTA fallback
+            structured_property = self._create_structured_property(doc_data, idx)
+            structured_properties.append(structured_property)
         
+        # Log diagnóstico: quantos possuem URL válida
+        try:
+            with_url = sum(1 for p in structured_properties if p.get("url") and p["url"].startswith("http"))
+            logger.info("StructuredPropertiesDiag | total=%d | with_url=%d", len(structured_properties), with_url)
+        except Exception:
+            pass
         return normalized_hits, structured_properties
 
 
@@ -472,6 +556,15 @@ class IntelligentRealEstateBot:
         meta = doc_data["meta"]
         text = doc_data["text"]
         
+        # URL fallback keys
+        url = (
+            meta.get("url")
+            or meta.get("link")
+            or meta.get("source_url")
+            or meta.get("page_url")
+            or meta.get("website")
+        )
+
         price = meta.get("price") or meta.get("valor") or None
         # Normalização simples de preço se vier somente números
         try:
@@ -484,7 +577,7 @@ class IntelligentRealEstateBot:
             "id": doc_data["id"],
             "title": self._extract_title_from_text(text) or f"Imóvel em {meta.get('neighborhood', meta.get('bairro', 'Curitiba'))}",
             "description": text[:200],
-            "url": meta.get("url"),
+            "url": url,
             "main_image": meta.get("main_image") or meta.get("image"),
             "neighborhood": meta.get("neighborhood") or meta.get("bairro"),
             "price": price or "Sob consulta",
@@ -962,15 +1055,54 @@ class IntelligentRealEstateBot:
                     # expirado -> remover lazy
                     FIRST_NAME_CACHE.pop(phone_hash, None)
 
-            # 2. Cache miss -> resolver
+            # 2. Cache miss -> resolver via profile/lead
             profile = supabase_client.get_user_profile(phone_norm)
             candidates = []
+            conv_name = None
+            lead_name = None
             if profile:
                 conv = profile.get('conversation') or {}
-                if conv.get('user_name'):
-                    candidates.append(conv['user_name'])
+                conv_name = conv.get('user_name') or conv.get('userName')
+                if conv_name:
+                    candidates.append(conv_name)
                 if profile.get('user_name'):
                     candidates.append(profile['user_name'])
+                lead = profile.get('lead') or {}
+                lead_name = lead.get('name') or lead.get('full_name')
+                if lead_name:
+                    candidates.append(lead_name)
+
+            # 3. Heurística em mensagens recentes (só se nada achado)
+            if not candidates:
+                try:
+                    import re
+                    conversation_row = supabase_client.client.table('conversations').select('id').eq('phone_number', phone_norm).limit(1).execute()
+                    if conversation_row.data:
+                        conv_id = conversation_row.data[0]['id']
+                        msgs = supabase_client.client.table('messages').select('content,direction').eq('conversation_id', conv_id).order('created_at', desc=True).limit(10).execute()
+                        patterns = [
+                            r"meu nome e\s+([A-Za-zÀ-ÖØ-öø-ÿ]{2,25})",
+                            r"meu nome é\s+([A-Za-zÀ-ÖØ-öø-ÿ]{2,25})",
+                            r"sou o\s+([A-Za-zÀ-ÖØ-öø-ÿ]{2,25})",
+                            r"sou a\s+([A-Za-zÀ-ÖØ-öø-ÿ]{2,25})",
+                            r"aqui é o\s+([A-Za-zÀ-ÖØ-öø-ÿ]{2,25})",
+                            r"aqui é a\s+([A-Za-zÀ-ÖØ-öø-ÿ]{2,25})",
+                        ]
+                        for msg in msgs.data or []:
+                            if msg.get('direction') != 'received':
+                                continue
+                            text_lower = (msg.get('content') or '').lower()
+                            for pat in patterns:
+                                m = re.search(pat, text_lower)
+                                if m:
+                                    candidates.append(m.group(1))
+                                    logger.debug(f"FirstName heuristic extracted '{m.group(1)}'")
+                                    break
+                            if candidates:
+                                break
+                except Exception as heur_e:
+                    logger.debug(f"Heuristic name extraction failed: {heur_e}")
+
             resolved = None
             for raw in candidates:
                 if not isinstance(raw, str):
@@ -981,10 +1113,11 @@ class IntelligentRealEstateBot:
                     resolved = clean.capitalize()
                     break
 
-            # 3. Escrever no cache (sem await/lock pesado — write simples é ok; se race menor impacto)
             ttl = FIRST_NAME_CACHE_TTL if resolved else FIRST_NAME_CACHE_NULL_TTL
             FIRST_NAME_CACHE[phone_hash] = (resolved, now + ttl)
-            logger.debug(f"FirstNameCache SET ({phone_hash[:6]}..) -> {resolved or 'NULL'} ttl={ttl}s")
+            logger.debug(
+                f"FirstNameCache SET ({phone_hash[:6]}..) -> {resolved or 'NULL'} ttl={ttl}s | conv={bool(conv_name)} lead={bool(lead_name)} heur={'yes' if (not conv_name and not lead_name and resolved) else 'no'}"
+            )
             return resolved
         except Exception as e:
             logger.debug(f"Name resolution failed (cache path) for {user_phone}: {e}")
