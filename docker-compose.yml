@@ -1,0 +1,63 @@
+# Alloha AI Platform - Docker Compose Configuration
+# Usage: docker compose up -d
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: alloha-backend:latest
+    env_file: [.env]
+    environment:
+      ENABLE_LOCAL_MOE: "true"
+      LOCAL_LLM_HOST: http://llm-sidecar:8081
+      LOCAL_LLM_MODEL: llama3-3b-instruct-q4
+      ADAPTERS_DIR: /app/adapters
+      ROUTER_CONFIDENCE_THRESHOLD: 0.7
+      FALLBACK_QUALITY_MIN_SCORE: 0.55
+    depends_on:
+      - llm-sidecar
+      - redis
+    volumes:
+      - ./datasets/finetune_dataset_3k.jsonl:/app/datasets/finetune_dataset_3k.jsonl:ro
+      - ./adapters:/app/adapters:ro
+    ports:
+      - "8000:8000"
+
+  llm-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile.sidecar-llm
+    image: alloha-llm-sidecar:latest
+    environment:
+      SERVER_PORT: 8081
+      THREADS: 2
+      CTX: 2048
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+networks:
+  default:
+    name: alloha-net

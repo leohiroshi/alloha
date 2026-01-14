@@ -153,7 +153,7 @@ class DualStackIntelligence:
         
         try:
             # Usar modelo fine-tuned
-            model = os.getenv("OPENAI_FINETUNED_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
+            model = os.getenv("OPENAI_FINETUNED_MODEL")
             response = await asyncio.to_thread(rag.call_gpt, full_prompt, model)
             
             # Extrair JSON
@@ -351,7 +351,7 @@ class DualStackIntelligence:
         """
         
         try:
-            model = os.getenv("OPENAI_FINETUNED_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
+            model = os.getenv("OPENAI_FINETUNED_MODEL")
             response = await asyncio.to_thread(rag.call_gpt, full_prompt, model)
             
             # Adicionar tags especiais para urgência

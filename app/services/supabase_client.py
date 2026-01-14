@@ -40,6 +40,11 @@ class SupabaseClient:
         self.openai_embed_model = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
         self.openai_embed_dim = 1536  # modelo text-embedding-3-small
         self.openai_client = None
+        # Rate limiting / cooldown controls for embeddings
+        self._last_embedding_at: Optional[datetime] = None
+        self._min_embed_interval_ms = int(os.getenv("EMBEDDING_MIN_INTERVAL_MS", "250"))  # throttle burst
+        self._openai_cooldown_until: Optional[datetime] = None
+        self._openai_cooldown_seconds = int(os.getenv("OPENAI_EMBED_COOLDOWN_SECONDS", "900"))  # 15 min default after quota 429
         self._init_if_possible(initial=True)
 
     def _init_if_possible(self, initial: bool = False):
@@ -915,7 +920,22 @@ class SupabaseClient:
             return None
 
         try:
-            if self.use_openai_embeddings and self.openai_client:
+            # Simple client-side throttling
+            now = datetime.utcnow()
+            if self._last_embedding_at:
+                delta_ms = (now - self._last_embedding_at).total_seconds() * 1000
+                if delta_ms < self._min_embed_interval_ms:
+                    # sleep blocking small (acceptable, low volume) to smooth spikes
+                    wait_ms = self._min_embed_interval_ms - int(delta_ms)
+                    if wait_ms > 0:
+                        import time
+                        time.sleep(wait_ms / 1000.0)
+            self._last_embedding_at = datetime.utcnow()
+
+            # Cooldown if we previously hit quota 429
+            if self._openai_cooldown_until and datetime.utcnow() < self._openai_cooldown_until:
+                logger.debug("OpenAI embedding em cooldown — usando fallback local diretamente")
+            elif self.use_openai_embeddings and self.openai_client:
                 try:
                     resp = self.openai_client.embeddings.create(
                         model=self.openai_embed_model,
@@ -926,12 +946,19 @@ class SupabaseClient:
                         raise ValueError(f"Dimensão retornada {len(vec)} != {self.openai_embed_dim}")
                     return vec
                 except Exception as oe:
-                    logger.warning(f"Falha OpenAI embedding: {oe} — fallback local")
-                    # continua para fallback
+                    msg = str(oe)
+                    # Detect quota / 429 to start longer cooldown
+                    if 'insufficient_quota' in msg or '429' in msg:
+                        self._openai_cooldown_until = datetime.utcnow() + timedelta(seconds=self._openai_cooldown_seconds)
+                        logger.warning(
+                            f"Falha OpenAI embedding (quota/429) — iniciando cooldown até {self._openai_cooldown_until.isoformat()}"
+                        )
+                    else:
+                        logger.warning(f"Falha OpenAI embedding: {oe} — fallback local")
+                    # continue to fallback
 
-            # Local encode
+            # Local encode fallback
             local_vec = self.embedding_model.encode([text])[0].tolist()
-            # Padding se modo OpenAI ativo (schema 1536) mas fallback 384
             if self.use_openai_embeddings:
                 if len(local_vec) < self.openai_embed_dim:
                     diff = self.openai_embed_dim - len(local_vec)

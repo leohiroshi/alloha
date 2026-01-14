@@ -10,7 +10,16 @@ WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    # ==== MoE / Local LLM Routing (override in deployment) ====
+    ENABLE_LOCAL_MOE=false \
+    LOCAL_LLM_HOST=http://llm-sidecar:8081 \
+    LOCAL_LLM_MODEL=llama3-3b-instruct-q4 \
+    LOCAL_LLM_TIMEOUT_SECONDS=25 \
+    ROUTER_CONFIDENCE_THRESHOLD=0.7 \
+    FALLBACK_QUALITY_MIN_SCORE=0.55 \
+    ADAPTERS_DIR=/app/adapters \
+    DEFAULT_ADAPTER=qualifica
 
 # System deps (curl needed for healthcheck and optional browser installs)
 RUN apt-get update && apt-get install -y --no-install-recommends \

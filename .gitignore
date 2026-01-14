@@ -1,13 +1,25 @@
-# Alloha.app - AI Chat System for Real Estate
-# Production deployment to Azure
+# =============================================================================
+# Alloha - AI-Powered Real Estate Platform
+# Comprehensive .gitignore for Python/FastAPI/Docker projects
+# =============================================================================
 
-# Environment variables
+# -----------------------------------------------------------------------------
+# Environment & Secrets (CRITICAL - Never commit these)
+# -----------------------------------------------------------------------------
 .env
-.env.local
-.env.azure
+.env.*
 *.env
+!.env.example
+secrets/
+credentials/
+*.pem
+*.key
+*-credentials.json
+alloha-credentials.json
 
+# -----------------------------------------------------------------------------
 # Python
+# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -25,44 +37,70 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.conda/
 
 # PyInstaller
 *.manifest
 *.spec
 
-# Unit test / coverage reports
+# Installer logs
+pip-log.txt
+
+# Unit test / coverage
 htmlcov/
 .tox/
+.nox/
 .coverage
 .coverage.*
 .cache
 nosetests.xml
 coverage.xml
 *.cover
+*.py,cover
 .hypothesis/
 .pytest_cache/
+pytest_cache/
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
 
-# IDE
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# -----------------------------------------------------------------------------
+# IDE & Editors
+# -----------------------------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
+.ropeproject
 
-# OS
+# -----------------------------------------------------------------------------
+# OS Generated
+# -----------------------------------------------------------------------------
 .DS_Store
 .DS_Store?
 ._*
@@ -70,30 +108,73 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+Desktop.ini
 
-# Logs
+# -----------------------------------------------------------------------------
+# Logs & Temporary Files
+# -----------------------------------------------------------------------------
 *.log
 logs/
-
-# Database
-*.sqlite
-*.db
-
-# Temporary files
 *.tmp
 *.temp
+*.bak
+.temp/
 
-# Azure specific
-.azure/
-*.zip
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
 
-#Others
-clear_messages.py
-alloha-credentials.json
-unsloth.Q8_0.gguf
+# -----------------------------------------------------------------------------
+# ML Models & Large Files
+# -----------------------------------------------------------------------------
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.h5
+*.hdf5
+models/*.gguf
 Modelfile
+
+# -----------------------------------------------------------------------------
+# Cache & Generated Data
+# -----------------------------------------------------------------------------
+cache/
+.cache/
+*.cache
+
+# -----------------------------------------------------------------------------
+# Cloud & Deployment
+# -----------------------------------------------------------------------------
+.azure/
+.aws/
+.gcloud/
+*.zip
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+
+# -----------------------------------------------------------------------------
+# Project-Specific Exclusions
+# -----------------------------------------------------------------------------
+# Legacy/temporary scripts
+clear_messages.py
 importproperties.py
 webscraping.py
+scripts/restore_firestore_schema.py
+
+# Training data (keep samples, exclude large files)
 sofia_training_data.jsonl
 allega_imoveis_selenium.csv
-scripts/restore_firestore_schema.py
+
+# Raw scraped data
+datasets/active_properties_*.csv
+datasets/expanded/
+datasets/living/
+
+# Supabase temp files
+supabase/.temp/

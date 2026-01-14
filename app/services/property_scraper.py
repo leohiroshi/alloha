@@ -61,7 +61,7 @@ class AllegaPropertyScraper:
         self._driver = None
 
         # GPT/OpenAI model
-        self.openai_model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
+        self.openai_model = os.getenv("OPENAI_MODEL")
 
     # Supabase client já está disponível via import
 
@@ -424,44 +424,74 @@ async def monitor_scraper(interval_minutes: int = 30, max_properties: int = 100)
         logger.info(f"[{datetime.utcnow()}] Iniciando verificação de imóveis...")
         try:
             scraped_properties = await scraper.scrape_all_properties(max_per_type=max_properties // 4)
-            scraped_dict = {p.get('reference') or p.get('url'): p for p in scraped_properties if p}
-            # Buscar imóveis existentes do Supabase
+            # Helper para chave consistente (espelha lógica de _prepare_property_record)
+            def _key(p: Dict[str, Any]) -> Optional[str]:
+                return (
+                    p.get('reference')
+                    or p.get('external_id')
+                    or p.get('property_id')
+                    or p.get('url')
+                )
+
+            scraped_dict = { _key(p): p for p in scraped_properties if p and _key(p) }
+
+            # Buscar imóveis existentes do Supabase (evitar campo 'reference' inexistente)
             result = await asyncio.to_thread(
-                supabase_client.client.table('properties').select('*').execute
+                supabase_client.client.table('properties').select('property_id, external_id, url, updated_at').execute
             )
             supabase_props = result.data or []
-            supabase_dict = {p.get('reference') or p.get('url'): p for p in supabase_props if p}
+            supabase_dict = { _key(p): p for p in supabase_props if p and _key(p) }
 
-            new_refs = set(scraped_dict.keys()) - set(supabase_dict.keys())
-            new_props = [scraped_dict[r] for r in new_refs if r]
-            removed_refs = set(supabase_dict.keys()) - set(scraped_dict.keys())
-            removed_props = [supabase_dict[r] for r in removed_refs if r]
+            scraped_keys = set(scraped_dict.keys())
+            supabase_keys = set(supabase_dict.keys())
 
-            updated = []
-            for ref in set(scraped_dict.keys()) & set(supabase_dict.keys()):
-                if scraped_dict[ref] != supabase_dict[ref]:
-                    updated.append(scraped_dict[ref])
+            new_keys = scraped_keys - supabase_keys
+            removed_keys = supabase_keys - scraped_keys
+            # Atualizados: interseção — faremos upsert sempre (idempotente). Poderíamos comparar hashes, mantemos simples.
+            intersect_keys = scraped_keys & supabase_keys
 
-            # Adicionar novos imóveis
+            new_props = [scraped_dict[k] for k in new_keys]
+            removed_props = [supabase_dict[k] for k in removed_keys]
+            updated_props = [scraped_dict[k] for k in intersect_keys]
+
+            # Upsert novos
             for prop in new_props:
                 await asyncio.to_thread(supabase_client.upsert_property, prop)
             if new_props:
                 logger.info(f"Adicionados {len(new_props)} imóveis ao Supabase")
 
-            # Remover imóveis que não existem mais
-            for prop in removed_props:
-                ref = prop.get('reference') or prop.get('url')
-                await asyncio.to_thread(
-                    supabase_client.client.table('properties').delete().eq('reference', ref).execute
-                )
-            if removed_props:
-                logger.info(f"Removidos {len(removed_props)} imóveis do Supabase")
-
-            # Atualizar imóveis modificados
-            for prop in updated:
+            # Upsert modificados (idempotente)
+            for prop in updated_props:
                 await asyncio.to_thread(supabase_client.upsert_property, prop)
-            if updated:
-                logger.info(f"Atualizados {len(updated)} imóveis no Supabase")
+            if updated_props:
+                logger.info(f"Verificados/atualizados {len(updated_props)} imóveis existentes")
+
+            # Remover imóveis não mais presentes (deletar por property_id -> fallback external_id -> url)
+            removed_count = 0
+            for prop in removed_props:
+                pid = prop.get('property_id')
+                ext = prop.get('external_id')
+                url = prop.get('url')
+                try:
+                    if pid:
+                        await asyncio.to_thread(
+                            supabase_client.client.table('properties').delete().eq('property_id', pid).execute
+                        )
+                        removed_count += 1
+                    elif ext:
+                        await asyncio.to_thread(
+                            supabase_client.client.table('properties').delete().eq('external_id', ext).execute
+                        )
+                        removed_count += 1
+                    elif url:
+                        await asyncio.to_thread(
+                            supabase_client.client.table('properties').delete().eq('url', url).execute
+                        )
+                        removed_count += 1
+                except Exception as de:
+                    logger.error(f"Falha ao remover imóvel (pid={pid} ext={ext} url={url}): {de}")
+            if removed_count:
+                logger.info(f"Removidos {removed_count} imóveis do Supabase")
 
             if scraped_properties:
                 insights = await scraper.generate_market_insights(scraped_properties)

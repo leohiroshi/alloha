@@ -26,7 +26,7 @@ class PropertyIntelligenceService:
 
     def __init__(self):
         # Nome do modelo GPT/OpenAI
-        self.openai_model = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
+        self.openai_model = os.getenv("OPENAI_MODEL")
         self.property_cache = {}
         self.cache_expiry = timedelta(hours=6)
         self.last_cache_update = None

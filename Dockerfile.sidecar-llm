@@ -1,0 +1,31 @@
+# Sidecar LLM Dockerfile - lightweight llama.cpp HTTP server
+# Base image with build tools
+FROM debian:stable-slim
+
+ARG LLM_MODEL_URL="https://huggingface.co/QuantFactory/Meta-Llama-3-3B-Instruct-GGUF/resolve/main/Meta-Llama-3-3B-Instruct.Q4_K_M.gguf"
+ARG MODEL_FILENAME="llama3-3b-instruct-q4_k_m.gguf"
+
+ENV MODEL_PATH=/models/${MODEL_FILENAME} \
+    SERVER_PORT=8081 \
+    THREADS=2 \
+    CTX=2048 \
+    HOST=0.0.0.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build llama.cpp server
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp && \
+    cd /llama.cpp && make -j $(nproc) server
+
+# Download quantized model (override with build arg if needed)
+RUN mkdir -p /models && \
+    echo "Baixando modelo ${LLM_MODEL_URL}" && \
+    curl -L -o ${MODEL_PATH} ${LLM_MODEL_URL}
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD curl -fsS http://localhost:${SERVER_PORT}/health || exit 1
+
+ENTRYPOINT ["/llama.cpp/server", "--model", "/models/llama3-3b-instruct-q4_k_m.gguf", "--port", "8081", "--ctx-size", "2048", "--mlock"]

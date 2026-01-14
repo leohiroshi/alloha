@@ -40,7 +40,7 @@ MAX_CONTEXT_TOKENS = 3000
 
 # OpenAI config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_CHAT_MODEL = os.getenv("OPENAI_MODEL", "ft:gpt-4.1-mini-2025-04-14:personal:alloha-sofia-v1:CMFHyUpi")
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_MODEL")
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = 30
 
