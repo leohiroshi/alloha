@@ -1,0 +1,462 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* Bioluminescent Sunset Theme */
+:root {
+  --background: #000000;
+  --foreground: #fafafa;
+  --card: rgba(20, 20, 20, 0.8);
+  --card-foreground: #fafafa;
+  --popover: #0a0a0a;
+  --popover-foreground: #fafafa;
+  --primary: #FF5500;
+  --primary-foreground: #000000;
+  --secondary: rgba(255, 85, 0, 0.1);
+  --secondary-foreground: #fafafa;
+  --muted: #1a1a1a;
+  --muted-foreground: #a3a3a3;
+  --accent: #FF5500;
+  --accent-foreground: #000000;
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+  --border: rgba(255, 85, 0, 0.2);
+  --input: rgba(255, 85, 0, 0.1);
+  --ring: #FF5500;
+  --chart-1: #FF5500;
+  --chart-2: #FF7733;
+  --chart-3: #FF9955;
+  --chart-4: #FFBB77;
+  --chart-5: #FFDD99;
+  --radius: 1rem;
+  --glow-orange: #FF5500;
+  --glow-amber: #FF8800;
+  --obsidian: #0a0a0a;
+  --obsidian-light: #1a1a1a;
+  --sidebar: var(--obsidian); /* Added from shadcn/ui, mapped to existing variable */
+  --sidebar-foreground: var(--foreground); /* Added from shadcn/ui, mapped to existing variable */
+  --sidebar-primary: var(--primary); /* Added from shadcn/ui, mapped to existing variable */
+  --sidebar-primary-foreground: var(--primary-foreground); /* Added from shadcn/ui, mapped to existing variable */
+  --sidebar-accent: var(--accent); /* Added from shadcn/ui, mapped to existing variable */
+  --sidebar-accent-foreground: var(--accent-foreground); /* Added from shadcn/ui, mapped to existing variable */
+  --sidebar-border: var(--border); /* Added from shadcn/ui, mapped to existing variable */
+  --sidebar-ring: var(--ring); /* Added from shadcn/ui, mapped to existing variable */
+}
+ 
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
+}
+
+@theme inline {
+  --font-sans: var(--font-inter), 'Inter', 'Inter Fallback', system-ui, sans-serif;
+  --font-serif: var(--font-playfair), 'Playfair Display', Georgia, serif;
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback';
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-glow-orange: var(--glow-orange);
+  --color-glow-amber: var(--glow-amber);
+  --color-obsidian: var(--obsidian);
+  --color-obsidian-light: var(--obsidian-light);
+  --color-sidebar: var(--sidebar); /* Added from shadcn/ui */
+  --color-sidebar-foreground: var(--sidebar-foreground); /* Added from shadcn/ui */
+  --color-sidebar-primary: var(--sidebar-primary); /* Added from shadcn/ui */
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground); /* Added from shadcn/ui */
+  --color-sidebar-accent: var(--sidebar-accent); /* Added from shadcn/ui */
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground); /* Added from shadcn/ui */
+  --color-sidebar-border: var(--sidebar-border); /* Added from shadcn/ui */
+  --color-sidebar-ring: var(--sidebar-ring); /* Added from shadcn/ui */
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground; /* Updated to use shadcn/ui variables */
+  }
+  ::selection {
+    background: rgba(255, 85, 0, 0.3);
+    color: white;
+  }
+}
+
+/* ============================================
+   BIOLUMINESCENT SUNSET ANIMATIONS
+   ============================================ */
+
+/* Fluid blob motion - organic lava lamp feel */
+@keyframes blob-float {
+  0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
+  20% { transform: translate(30px, -40px) scale(1.15) rotate(2deg); }
+  40% { transform: translate(-25px, 25px) scale(0.9) rotate(-3deg); }
+  60% { transform: translate(40px, 15px) scale(1.08) rotate(1deg); }
+  80% { transform: translate(-15px, -20px) scale(0.95) rotate(-1deg); }
+}
+
+/* Smooth shimmer sweep */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Breathing glow pulse */
+@keyframes glow-pulse {
+  0%, 100% { 
+    opacity: 0.4;
+    filter: blur(60px);
+  }
+  50% { 
+    opacity: 0.8;
+    filter: blur(80px);
+  }
+}
+
+/* Ocean wave float - gentle vertical motion */
+@keyframes wave-float {
+  0%, 100% { 
+    transform: translateY(0) rotate(0deg); 
+  }
+  25% { 
+    transform: translateY(-8px) rotate(0.5deg); 
+  }
+  50% { 
+    transform: translateY(-12px) rotate(0deg); 
+  }
+  75% { 
+    transform: translateY(-6px) rotate(-0.5deg); 
+  }
+}
+
+/* Gradient color shift animation */
+@keyframes gradient-shift {
+  0%, 100% { 
+    background-position: 0% 50%; 
+    filter: hue-rotate(0deg);
+  }
+  50% { 
+    background-position: 100% 50%; 
+    filter: hue-rotate(10deg);
+  }
+}
+
+/* Liquid ripple effect */
+@keyframes ripple {
+  0% { 
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% { 
+    transform: scale(2.5);
+    opacity: 0;
+  }
+}
+
+/* Border glow rotation */
+@keyframes border-rotate {
+  0% { 
+    background-position: 0% 50%;
+  }
+  50% { 
+    background-position: 100% 50%;
+  }
+  100% { 
+    background-position: 0% 50%;
+  }
+}
+
+/* Magnetic hover pulse */
+@keyframes magnetic-pulse {
+  0%, 100% { 
+    box-shadow: 0 0 0 0 rgba(255, 85, 0, 0.4);
+  }
+  50% { 
+    box-shadow: 0 0 40px 10px rgba(255, 85, 0, 0.2);
+  }
+}
+
+/* Fade slide in from bottom */
+@keyframes fade-slide-up {
+  0% { 
+    opacity: 0;
+    transform: translateY(40px);
+  }
+  100% { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scale fade in */
+@keyframes scale-fade-in {
+  0% { 
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  100% { 
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ============================================
+   ANIMATION UTILITY CLASSES
+   ============================================ */
+
+.animate-blob-float {
+  animation: blob-float 25s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg, 
+    transparent 0%, 
+    rgba(255, 85, 0, 0.15) 25%, 
+    rgba(255, 136, 0, 0.1) 50%, 
+    rgba(255, 85, 0, 0.15) 75%, 
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.5s ease-in-out infinite;
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 4s ease-in-out infinite;
+}
+
+.animate-wave-float {
+  animation: wave-float 6s ease-in-out infinite;
+}
+
+.animate-gradient-shift {
+  background-size: 200% 200%;
+  animation: gradient-shift 4s ease infinite;
+}
+
+.animate-ripple {
+  animation: ripple 1s ease-out forwards;
+}
+
+.animate-border-rotate {
+  background-size: 300% 300%;
+  animation: border-rotate 6s linear infinite;
+}
+
+.animate-magnetic-pulse {
+  animation: magnetic-pulse 2s ease-in-out infinite;
+}
+
+.animate-fade-slide-up {
+  animation: fade-slide-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-scale-fade-in {
+  animation: scale-fade-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ============================================
+   GLASS MORPHISM EFFECTS
+   ============================================ */
+
+.glass {
+  background: rgba(10, 10, 10, 0.75);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border: 1px solid rgba(255, 85, 0, 0.12);
+}
+
+.glass-subtle {
+  background: rgba(10, 10, 10, 0.5);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.glass-glow {
+  box-shadow: 
+    0 0 40px rgba(255, 85, 0, 0.12),
+    0 0 80px rgba(255, 85, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 0 30px rgba(255, 85, 0, 0.03);
+}
+
+.glass-glow-intense {
+  box-shadow: 
+    0 0 60px rgba(255, 85, 0, 0.2),
+    0 0 120px rgba(255, 85, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 40px rgba(255, 85, 0, 0.05);
+}
+
+/* ============================================
+   BIOLUMINESCENT EFFECTS
+   ============================================ */
+
+.bioluminescent {
+  position: relative;
+}
+
+.bioluminescent::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 85, 0, 0.3) 0%,
+    rgba(255, 136, 0, 0.2) 25%,
+    transparent 50%,
+    rgba(255, 136, 0, 0.2) 75%,
+    rgba(255, 85, 0, 0.3) 100%
+  );
+  border-radius: inherit;
+  filter: blur(8px);
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  z-index: -1;
+}
+
+.bioluminescent:hover::before {
+  opacity: 1;
+}
+
+/* Cursor glow effect */
+.cursor-glow {
+  pointer-events: none;
+  position: fixed;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(
+    circle,
+    rgba(255, 85, 0, 0.15) 0%,
+    rgba(255, 85, 0, 0.05) 30%,
+    transparent 70%
+  );
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9999;
+  filter: blur(40px);
+  mix-blend-mode: screen;
+}
+
+/* ============================================
+   TEXT EFFECTS
+   ============================================ */
+
+.text-gradient-sunset {
+  background: linear-gradient(135deg, #FF5500 0%, #FF8800 50%, #FF5500 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.text-glow {
+  text-shadow: 
+    0 0 20px rgba(255, 85, 0, 0.5),
+    0 0 40px rgba(255, 85, 0, 0.3),
+    0 0 60px rgba(255, 85, 0, 0.1);
+}
+
+/* ============================================
+   SCROLLBAR STYLING
+   ============================================ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(10, 10, 10, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 85, 0, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 85, 0, 0.5);
+}
+
+/* ============================================
+   FOCUS & INTERACTION STATES
+   ============================================ */
+
+*:focus-visible {
+  outline: 2px solid rgba(255, 85, 0, 0.5);
+  outline-offset: 2px;
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Reduce motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,180 +1,50 @@
-# =============================================================================
-# Alloha - AI-Powered Real Estate Platform
-# Comprehensive .gitignore for Python/FastAPI/Docker projects
-# =============================================================================
+# Dependencies
+node_modules/
+.pnpm-store/
 
-# -----------------------------------------------------------------------------
-# Environment & Secrets (CRITICAL - Never commit these)
-# -----------------------------------------------------------------------------
-.env
-.env.*
-*.env
-!.env.example
-secrets/
-credentials/
-*.pem
-*.key
-*-credentials.json
-alloha-credentials.json
-
-# -----------------------------------------------------------------------------
 # Python
-# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Virtual environments
 .venv/
 venv/
-ENV/
-env/
-.conda/
+*.egg-info/
+dist/
 
-# PyInstaller
-*.manifest
-*.spec
+# Build outputs
+.next/
+.turbo/
+out/
+build/
 
-# Installer logs
-pip-log.txt
+# Environment
+.env
+.env.local
+.env.*.local
 
-# Unit test / coverage
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-pytest_cache/
-
-# Type checkers
-.mypy_cache/
-.dmypy.json
-dmypy.json
-.pytype/
-.pyre/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# -----------------------------------------------------------------------------
-# IDE & Editors
-# -----------------------------------------------------------------------------
-.vscode/
+# IDE
 .idea/
+.vscode/
 *.swp
 *.swo
-*~
-*.sublime-project
-*.sublime-workspace
-.spyderproject
-.spyproject
-.ropeproject
 
-# -----------------------------------------------------------------------------
-# OS Generated
-# -----------------------------------------------------------------------------
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-Desktop.ini
-
-# -----------------------------------------------------------------------------
-# Logs & Temporary Files
-# -----------------------------------------------------------------------------
+# Logs
 *.log
 logs/
-*.tmp
-*.temp
-*.bak
-.temp/
 
-# -----------------------------------------------------------------------------
-# Database
-# -----------------------------------------------------------------------------
-*.sqlite
-*.sqlite3
-*.db
-
-# -----------------------------------------------------------------------------
-# ML Models & Large Files
-# -----------------------------------------------------------------------------
-*.gguf
-*.bin
-*.safetensors
-*.pt
-*.pth
-*.h5
-*.hdf5
-models/*.gguf
-Modelfile
-
-# -----------------------------------------------------------------------------
-# Cache & Generated Data
-# -----------------------------------------------------------------------------
-cache/
+# Cache
 .cache/
-*.cache
+cache/
 
-# -----------------------------------------------------------------------------
-# Cloud & Deployment
-# -----------------------------------------------------------------------------
-.azure/
-.aws/
-.gcloud/
-*.zip
-terraform.tfstate
-terraform.tfstate.backup
-.terraform/
+# OS
+.DS_Store
+Thumbs.db
 
-# -----------------------------------------------------------------------------
-# Project-Specific Exclusions
-# -----------------------------------------------------------------------------
-# Legacy/temporary scripts
-clear_messages.py
-importproperties.py
-webscraping.py
-scripts/restore_firestore_schema.py
+# Testing
+coverage/
+.nyc_output/
+.pytest_cache/
 
-# Training data (keep samples, exclude large files)
-sofia_training_data.jsonl
-allega_imoveis_selenium.csv
-
-# Raw scraped data
-datasets/active_properties_*.csv
-datasets/expanded/
-datasets/living/
-
-# Supabase temp files
-supabase/.temp/
+# Misc
+*.pem
+.vercel
