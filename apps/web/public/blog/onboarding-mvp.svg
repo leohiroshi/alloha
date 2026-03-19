@@ -1,0 +1,37 @@
+﻿<svg width="1600" height="960" viewBox="0 0 1600 960" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="172" y1="64" x2="1452" y2="932" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14100D"/>
+      <stop offset="0.52" stop-color="#090909"/>
+      <stop offset="1" stop-color="#040404"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1228 214) rotate(129.251) scale(460.129 402.715)">
+      <stop stop-color="#FF7A2F" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#FF7A2F" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="72" height="72" patternUnits="userSpaceOnUse">
+      <path d="M72 0H0V72" stroke="white" stroke-opacity="0.08"/>
+    </pattern>
+  </defs>
+  <rect width="1600" height="960" fill="#050505"/>
+  <rect width="1600" height="960" fill="url(#bg)"/>
+  <rect width="1600" height="960" fill="url(#grid)"/>
+  <rect width="1600" height="960" fill="url(#glow)"/>
+  <rect x="88" y="92" width="164" height="40" rx="20" fill="#FF5500" fill-opacity="0.12" stroke="#FFAD78" stroke-opacity="0.24"/>
+  <text x="120" y="118" fill="#F6C3A2" font-size="22" font-family="Arial, Helvetica, sans-serif" letter-spacing="0.24em">ALLOHA / BLOG</text>
+  <text x="112" y="274" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">Novo fluxo</text>
+  <text x="112" y="370" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">de onboarding</text>
+  <text x="112" y="466" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">do MVP</text>
+  <text x="116" y="564" fill="#B4ADA8" font-size="30" font-family="Arial, Helvetica, sans-serif">Menos cliques, primeira carga e validacao em um unico fluxo.</text>
+  <rect x="978" y="210" width="460" height="520" rx="34" fill="white" fill-opacity="0.02" stroke="#FFB06E" stroke-opacity="0.36" stroke-width="4"/>
+  <rect x="1038" y="280" width="148" height="100" rx="24" fill="white" fill-opacity="0.03" stroke="white" stroke-opacity="0.14"/>
+  <rect x="1228" y="280" width="148" height="100" rx="24" fill="#FF5500" fill-opacity="0.09" stroke="#FFB06E" stroke-opacity="0.54"/>
+  <rect x="1038" y="438" width="148" height="100" rx="24" fill="#FF5500" fill-opacity="0.09" stroke="#FFB06E" stroke-opacity="0.54"/>
+  <rect x="1228" y="438" width="148" height="100" rx="24" fill="white" fill-opacity="0.03" stroke="white" stroke-opacity="0.14"/>
+  <path d="M1186 330H1228" stroke="#FFB06E" stroke-width="6" stroke-linecap="round"/>
+  <path d="M1112 380V438" stroke="#FFB06E" stroke-width="6" stroke-linecap="round"/>
+  <path d="M1302 380V438" stroke="#FFB06E" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="1112" cy="380" r="14" fill="#FF5500"/>
+  <circle cx="1302" cy="380" r="14" fill="#FF5500"/>
+  <circle cx="1228" cy="330" r="14" fill="#FF5500"/>
+</svg>

@@ -1,0 +1,34 @@
+﻿<svg width="1600" height="960" viewBox="0 0 1600 960" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="170" y1="50" x2="1450" y2="930" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14100D"/>
+      <stop offset="0.52" stop-color="#090909"/>
+      <stop offset="1" stop-color="#040404"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1224 210) rotate(129.6) scale(468.955 408.708)">
+      <stop stop-color="#FF7A2F" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#FF7A2F" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="72" height="72" patternUnits="userSpaceOnUse">
+      <path d="M72 0H0V72" stroke="white" stroke-opacity="0.08"/>
+    </pattern>
+  </defs>
+  <rect width="1600" height="960" fill="#050505"/>
+  <rect width="1600" height="960" fill="url(#bg)"/>
+  <rect width="1600" height="960" fill="url(#grid)"/>
+  <rect width="1600" height="960" fill="url(#glow)"/>
+  <rect x="88" y="92" width="164" height="40" rx="20" fill="#FF5500" fill-opacity="0.12" stroke="#FFAD78" stroke-opacity="0.24"/>
+  <text x="120" y="118" fill="#F6C3A2" font-size="22" font-family="Arial, Helvetica, sans-serif" letter-spacing="0.24em">ALLOHA / BLOG</text>
+  <text x="112" y="274" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">Sinais de que</text>
+  <text x="112" y="370" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">o MVP esta pronto</text>
+  <text x="112" y="466" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">para demo</text>
+  <text x="116" y="564" fill="#B4ADA8" font-size="30" font-family="Arial, Helvetica, sans-serif">Consistencia visual, narrativa clara e fluxo sem quebra.</text>
+  <rect x="1002" y="196" width="430" height="540" rx="34" fill="white" fill-opacity="0.02" stroke="#FFB06E" stroke-opacity="0.38" stroke-width="4"/>
+  <rect x="1066" y="262" width="302" height="188" rx="28" fill="#FF5500" fill-opacity="0.09" stroke="#FFB06E" stroke-opacity="0.54" stroke-width="4"/>
+  <path d="M1188 320L1272 356L1188 392V320Z" fill="#FFEAD8"/>
+  <path d="M1088 510H1342" stroke="#FFF1E7" stroke-opacity="0.84" stroke-width="12" stroke-linecap="round"/>
+  <path d="M1088 562H1302" stroke="#FFF1E7" stroke-opacity="0.6" stroke-width="12" stroke-linecap="round"/>
+  <path d="M1088 614H1248" stroke="#FFF1E7" stroke-opacity="0.4" stroke-width="12" stroke-linecap="round"/>
+  <rect x="112" y="642" width="280" height="68" rx="22" fill="#0D0D0D" stroke="white" stroke-opacity="0.12"/>
+  <text x="146" y="686" fill="#FFF1E7" font-size="24" font-family="Arial, Helvetica, sans-serif">narrativa + velocidade</text>
+</svg>

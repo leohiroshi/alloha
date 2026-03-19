@@ -1,7 +1,9 @@
 """
 Supabase Client - Drop-in replacement
-Suporta busca híbrida (vector + full-text), cache, e idempotency
+Suporta busca híbrida (vector + full-text), cache, e idempotency.
 """
+
+from __future__ import annotations
 
 import os
 import logging
@@ -12,9 +14,21 @@ import re
 from uuid import uuid4
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from sentence_transformers import SentenceTransformer
-import openai
-import numpy as np
+
+try:
+    from sentence_transformers import SentenceTransformer  # type: ignore
+except ImportError:  # pragma: no cover
+    SentenceTransformer = None  # type: ignore
+
+try:
+    import openai  # type: ignore
+except ImportError:  # pragma: no cover
+    openai = None  # type: ignore
+
+try:
+    import numpy as np  # type: ignore
+except ImportError:  # pragma: no cover
+    np = None  # type: ignore
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -32,13 +46,16 @@ class SupabaseClient:
         self.supabase_url = os.getenv("SUPABASE_URL")
         self.supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
         self.client: Optional[Client] = None
-        self.embedding_model: Optional[SentenceTransformer] = None
+        self.embedding_model: Optional[Any] = None
         self.available = False
-        # Embeddings sempre 1536 (schema vector(1536)); OpenAI preferencial com fallback local padded
-        self.use_openai_embeddings = True  # sempre tentar OpenAI primeiro
+        # Embeddings ficam desligados por padrão no perfil low-cost do Cloud Run.
+        self.enable_property_embeddings = os.getenv("ENABLE_PROPERTY_EMBEDDINGS", "0") == "1"
+        self.use_openai_embeddings = (
+            self.enable_property_embeddings and os.getenv("USE_OPENAI_EMBEDDINGS", "0") == "1"
+        )
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.openai_embed_model = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
-        self.openai_embed_dim = 1536  # modelo text-embedding-3-small
+        self.openai_embed_dim = int(os.getenv("PROPERTY_EMBED_DIM", "384"))
         self.openai_client = None
         # Rate limiting / cooldown controls for embeddings
         self._last_embedding_at: Optional[datetime] = None
@@ -56,17 +73,6 @@ class SupabaseClient:
             return
         try:
             self.client = create_client(self.supabase_url, self.supabase_key)
-            # Carregar modelo local sempre (serve como fallback / modo offline)
-            self.embedding_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')  # 384 dims
-            if self.openai_api_key:
-                try:
-                    self.openai_client = openai.OpenAI(api_key=self.openai_api_key, timeout=30)
-                    logger.info("✅ OpenAI embeddings habilitados (modelo %s)" % self.openai_embed_model)
-                except Exception as oe:
-                    logger.warning(f"⚠️ Falha ao inicializar cliente OpenAI: {oe} — fallback local")
-                    self.openai_client = None
-            else:
-                logger.warning("⚠️ OPENAI_API_KEY ausente — usando apenas modelo local (padding 384→1536)")
             self.available = True
             logger.info("✅ Supabase client inicializado (lazy)")
         except Exception as e:
@@ -87,6 +93,37 @@ class SupabaseClient:
         if not client:
             raise RuntimeError("Supabase ainda não configurado (defina SUPABASE_URL e SUPABASE_SERVICE_KEY).")
         return client
+
+    def _ensure_openai_client(self) -> Optional[Any]:
+        if not self.use_openai_embeddings or not self.openai_api_key:
+            return None
+        if self.openai_client is not None:
+            return self.openai_client
+        if openai is None:
+            logger.warning("OpenAI SDK não instalado; embeddings remotos desativados.")
+            return None
+        try:
+            self.openai_client = openai.OpenAI(api_key=self.openai_api_key, timeout=30)
+        except Exception as exc:
+            logger.warning(f"⚠️ Falha ao inicializar cliente OpenAI: {exc}")
+            self.openai_client = None
+        return self.openai_client
+
+    def _ensure_local_embedding_model(self) -> Optional[Any]:
+        if not self.enable_property_embeddings:
+            return None
+        if self.embedding_model is not None:
+            return self.embedding_model
+        if SentenceTransformer is None:
+            logger.warning("sentence-transformers não está instalado; embeddings locais indisponíveis.")
+            return None
+        try:
+            self.embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+            logger.info("✅ Modelo local de embeddings carregado sob demanda.")
+        except Exception as exc:
+            logger.warning(f"⚠️ Falha ao carregar modelo local de embeddings: {exc}")
+            self.embedding_model = None
+        return self.embedding_model
     
     # ================================================================
     # PROPERTIES - Busca híbrida avançada
@@ -166,7 +203,7 @@ class SupabaseClient:
         70% weight em semantic, 30% em keyword matching
         """
         try:
-            # Gerar embedding da query (1536 com fallback local padded)
+            # Gerar embedding da query (padrao 384; configuravel via env)
             query_embedding = self._generate_embedding(query[:2000]) or []
             
             # Executar busca híbrida usando função SQL
@@ -217,11 +254,11 @@ class SupabaseClient:
             if not prepared:
                 return None
 
-            # Gerar embedding (preferencial OpenAI 1536 -> fallback local 384 padded)
-            text_for_embedding = f"{prepared.get('title', '')} {prepared.get('description', '')}".strip()[:4000]
-            embedding = self._generate_embedding(text_for_embedding)
-            if embedding is not None:
-                prepared['embedding'] = embedding
+            if self.enable_property_embeddings:
+                text_for_embedding = f"{prepared.get('title', '')} {prepared.get('description', '')}".strip()[:4000]
+                embedding = self._generate_embedding(text_for_embedding)
+                if embedding is not None:
+                    prepared['embedding'] = embedding
             prepared['updated_at'] = datetime.utcnow().isoformat()
 
             logger.debug(f"Upsert property_id={prepared.get('property_id')} source={prepared.get('source')}")
@@ -585,8 +622,10 @@ class SupabaseClient:
     # EMBEDDING CACHE
     # ================================================================
     
-    def get_cached_embedding(self, text: str) -> Optional[np.ndarray]:
+    def get_cached_embedding(self, text: str) -> Optional[Any]:
         """Busca embedding no cache"""
+        if np is None:
+            return None
         try:
             text_hash = hashlib.sha256(text.encode()).hexdigest()
             
@@ -618,13 +657,10 @@ class SupabaseClient:
             logger.debug(f"Cache miss para texto: {text[:50]}...")
             return None
     
-    def cache_embedding(
-        self, 
-        text: str, 
-        embedding: np.ndarray,
-        ttl_days: int = 30
-    ) -> bool:
+    def cache_embedding(self, text: str, embedding: Any, ttl_days: int = 30) -> bool:
         """Salva embedding no cache"""
+        if np is None:
+            return False
         try:
             text_hash = hashlib.sha256(text.encode()).hexdigest()
             
@@ -730,35 +766,33 @@ class SupabaseClient:
         filters: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """Aplica filtros aos metadados dos resultados de vector search"""
-        filtered = results
-        
-        for result in filtered:
+        filtered: List[Dict[str, Any]] = []
+
+        for result in results:
             metadata = result.get('metadata', {})
             
             # Filtro de preço mínimo
             if 'min_price' in filters:
                 if metadata.get('price', 0) < filters['min_price']:
-                    filtered.remove(result)
                     continue
             
             # Filtro de preço máximo
             if 'max_price' in filters:
                 if metadata.get('price', float('inf')) > filters['max_price']:
-                    filtered.remove(result)
                     continue
             
             # Filtro de tipo de imóvel
             if 'property_type' in filters:
                 if metadata.get('property_type') != filters['property_type']:
-                    filtered.remove(result)
                     continue
             
             # Filtro de quartos
             if 'bedrooms' in filters:
                 if metadata.get('bedrooms', 0) < filters['bedrooms']:
-                    filtered.remove(result)
                     continue
-        
+
+            filtered.append(result)
+
         return filtered
     
     def _apply_filters(
@@ -879,13 +913,17 @@ class SupabaseClient:
             'bathrooms': raw.get('bathrooms'),
             'area_m2': raw.get('area_m2'),
             'property_type': raw.get('property_type'),
-            'status': 'active',
+            'status': raw.get('status') or 'active',
             'images': images or None,
             'amenities': features[:50] or None,
             'owner_info': None,
             'source': raw.get('source') or 'allega_scraper',
             'external_id': raw.get('reference') or reference,
             'last_sync_at': datetime.utcnow().isoformat(),
+            'source_updated_at': raw.get('source_updated_at'),
+            'content_hash': raw.get('content_hash'),
+            'last_seen_at': raw.get('last_seen_at'),
+            'is_deleted': raw.get('is_deleted'),
             'created_at': datetime.utcnow().isoformat(),  # só usado se inserir
             'ai_analysis': (raw.get('ai_analysis') or '')[:500],
             'url': raw.get('url')
@@ -918,6 +956,8 @@ class SupabaseClient:
         """
         if not text:
             return None
+        if not self.enable_property_embeddings:
+            return None
 
         try:
             # Simple client-side throttling
@@ -935,7 +975,10 @@ class SupabaseClient:
             # Cooldown if we previously hit quota 429
             if self._openai_cooldown_until and datetime.utcnow() < self._openai_cooldown_until:
                 logger.debug("OpenAI embedding em cooldown — usando fallback local diretamente")
-            elif self.use_openai_embeddings and self.openai_client:
+            else:
+                self._ensure_openai_client()
+
+            if self.use_openai_embeddings and self.openai_client:
                 try:
                     resp = self.openai_client.embeddings.create(
                         model=self.openai_embed_model,
@@ -958,7 +1001,10 @@ class SupabaseClient:
                     # continue to fallback
 
             # Local encode fallback
-            local_vec = self.embedding_model.encode([text])[0].tolist()
+            embedding_model = self._ensure_local_embedding_model()
+            if embedding_model is None:
+                return None
+            local_vec = embedding_model.encode([text])[0].tolist()
             if self.use_openai_embeddings:
                 if len(local_vec) < self.openai_embed_dim:
                     diff = self.openai_embed_dim - len(local_vec)

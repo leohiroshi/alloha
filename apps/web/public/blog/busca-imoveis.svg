@@ -1,0 +1,38 @@
+﻿<svg width="1600" height="960" viewBox="0 0 1600 960" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="180" y1="52" x2="1436" y2="916" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#15110E"/>
+      <stop offset="0.5" stop-color="#090909"/>
+      <stop offset="1" stop-color="#040404"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1246 208) rotate(127.166) scale(458.815 418.519)">
+      <stop stop-color="#FF7A2F" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#FF7A2F" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="72" height="72" patternUnits="userSpaceOnUse">
+      <path d="M72 0H0V72" stroke="white" stroke-opacity="0.08"/>
+    </pattern>
+  </defs>
+  <rect width="1600" height="960" fill="#050505"/>
+  <rect width="1600" height="960" fill="url(#bg)"/>
+  <rect width="1600" height="960" fill="url(#grid)"/>
+  <rect width="1600" height="960" fill="url(#glow)"/>
+  <rect x="88" y="92" width="164" height="40" rx="20" fill="#FF5500" fill-opacity="0.12" stroke="#FFAD78" stroke-opacity="0.24"/>
+  <text x="120" y="118" fill="#F6C3A2" font-size="22" font-family="Arial, Helvetica, sans-serif" letter-spacing="0.24em">ALLOHA / BLOG</text>
+  <text x="112" y="274" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">Como validar</text>
+  <text x="112" y="370" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">a busca de</text>
+  <text x="112" y="466" fill="#FFF8F3" font-size="84" font-weight="700" font-family="Arial, Helvetica, sans-serif">imoveis</text>
+  <text x="116" y="564" fill="#B4ADA8" font-size="30" font-family="Arial, Helvetica, sans-serif">Relevancia, frescor e cobertura antes de vender escala.</text>
+  <circle cx="1210" cy="376" r="124" fill="#FF5500" fill-opacity="0.08" stroke="#FFB06E" stroke-opacity="0.58" stroke-width="8"/>
+  <path d="M1290 456L1380 546" stroke="#FF9A5D" stroke-width="18" stroke-linecap="round"/>
+  <path d="M1024 226C1090 186 1182 182 1262 206C1334 228 1406 286 1432 360C1458 434 1438 520 1384 582C1334 640 1244 684 1158 674C1078 664 998 624 954 554C912 486 900 394 932 330C960 276 984 250 1024 226Z" fill="white" fill-opacity="0.02" stroke="#FFB06E" stroke-opacity="0.36" stroke-width="4"/>
+  <circle cx="1044" cy="306" r="16" fill="#FF5500"/>
+  <circle cx="1174" cy="258" r="16" fill="#FF5500"/>
+  <circle cx="1290" cy="310" r="16" fill="#FF5500"/>
+  <circle cx="1338" cy="446" r="16" fill="#FF5500"/>
+  <circle cx="1218" cy="580" r="16" fill="#FF5500"/>
+  <circle cx="1078" cy="534" r="16" fill="#FF5500"/>
+  <path d="M1044 306L1174 258L1290 310L1338 446L1218 580L1078 534L1044 306Z" stroke="#FFB06E" stroke-opacity="0.7" stroke-width="4"/>
+  <rect x="112" y="642" width="238" height="68" rx="22" fill="#0D0D0D" stroke="white" stroke-opacity="0.12"/>
+  <text x="146" y="686" fill="#FFF1E7" font-size="24" font-family="Arial, Helvetica, sans-serif">ranking + dados</text>
+</svg>

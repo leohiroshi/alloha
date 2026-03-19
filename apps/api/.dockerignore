@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+.venv/
+cache/
+datasets/
+supabase/.temp/
+rag_pipeline.log
+sofia_training_data.jsonl
+Dockerfile.sidecar-llm
+docker-compose.yml
+scripts/

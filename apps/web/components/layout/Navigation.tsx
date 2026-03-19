@@ -4,18 +4,21 @@ import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Menu, X } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { MagneticButton } from "../ui/MagneticButton";
 import { LanguageSwitcher } from "../LanguageSwitcher";
 
 export function Navigation() {
   const { t } = useLanguage();
+  const router = useRouter();
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const navItems = [
     { key: "nav.about", href: "#about" },
-    { key: "nav.blog", href: "#blog" },
+    { key: "nav.blog", href: "/blog" },
     { key: "nav.features", href: "#features" },
     { key: "nav.pricing", href: "#pricing" },
     { key: "nav.faq", href: "#faq" },
@@ -37,10 +40,12 @@ export function Navigation() {
         isScrolled ? "bg-black/80 backdrop-blur-xl border border-white/10" : "bg-transparent"
       }`}>
         <div className="flex items-center justify-between">
-          <motion.div className="flex items-center gap-2" whileHover={{ scale: 1.02 }}>
-            <Image src="/logo.png" alt="Alloha" width={24} height={24} />
-            <span className="text-lg font-bold text-white">Alloha</span>
-          </motion.div>
+          <Link href="/">
+            <motion.div className="flex items-center gap-2" whileHover={{ scale: 1.02 }}>
+              <Image src="/logo.png" alt="Alloha" width={24} height={24} />
+              <span className="text-lg font-bold text-white">Alloha</span>
+            </motion.div>
+          </Link>
 
           <div className="hidden md:flex items-center gap-6 text-sm">
             {navItems.map((item) => (
@@ -52,8 +57,11 @@ export function Navigation() {
 
           <div className="hidden md:flex items-center gap-3">
             <LanguageSwitcher />
-            <MagneticButton className="bg-[#FF5500] text-black font-semibold px-5 py-2 rounded-full text-sm">
-              {t("nav.bookCall")}
+            <MagneticButton
+              onClick={() => router.push("/login")}
+              className="bg-[#FF5500] text-black font-semibold px-5 py-2 rounded-full text-sm"
+            >
+              Entrar ou Cadastrar-se
             </MagneticButton>
           </div>
 
@@ -80,8 +88,14 @@ export function Navigation() {
               <div className="pt-2">
                 <LanguageSwitcher />
               </div>
-              <MagneticButton className="bg-[#FF5500] text-black font-semibold px-5 py-3 rounded-full text-sm mt-2">
-                {t("nav.bookCall")}
+              <MagneticButton
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  router.push("/login");
+                }}
+                className="bg-[#FF5500] text-black font-semibold px-5 py-3 rounded-full text-sm mt-2"
+              >
+                Entrar ou Cadastrar-se
               </MagneticButton>
             </div>
           </motion.div>

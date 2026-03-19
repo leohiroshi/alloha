@@ -4,11 +4,13 @@ import { useRef } from "react";
 import { motion, useInView } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { MagneticButton } from "../ui/MagneticButton";
 
 export function CTA() {
   const { t } = useLanguage();
+  const router = useRouter();
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: "-100px" });
 
@@ -37,7 +39,10 @@ export function CTA() {
             {t("cta.subtitle")}
           </p>
 
-          <MagneticButton className="bg-[#FF5500] hover:bg-[#FF6600] text-black font-bold px-10 py-4 rounded-full text-lg transition-colors">
+          <MagneticButton
+            onClick={() => router.push("/signup")}
+            className="bg-[#FF5500] hover:bg-[#FF6600] text-black font-bold px-10 py-4 rounded-full text-lg transition-colors"
+          >
             <span className="flex items-center gap-2">
               {t("cta.button")}
               <ArrowRight className="w-5 h-5" />

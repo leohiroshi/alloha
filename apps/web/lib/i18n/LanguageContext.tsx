@@ -21,7 +21,7 @@ const translations: Record<Language, Record<string, string>> = {
     "nav.features": "Features",
     "nav.pricing": "Pricing",
     "nav.faq": "FAQ",
-    "nav.bookCall": "Book a call",
+    "nav.bookCall": "Start free trial",
 
     // Hero
     "hero.urgency": "Hurry, only",
@@ -33,7 +33,7 @@ const translations: Record<Language, Record<string, string>> = {
     "hero.subtitleHighlight": "limitless",
     "hero.subtitle2": ", lightning fast responses.",
     "hero.ctaPrimary": "Get started free",
-    "hero.ctaSecondary": "Watch demo",
+    "hero.ctaSecondary": "Sign in to configure",
     "hero.socialProof": "Our clients are featured on",
 
     // Phone Chat
@@ -75,7 +75,7 @@ const translations: Record<Language, Record<string, string>> = {
     "process.step2.desc": "Receive your design as fast as two business days on average.",
     "process.step3.title": "Revise",
     "process.step3.desc": "We'll revise the designs until you're 100% satisfied.",
-    "process.cta": "Book a 15-min call",
+    "process.cta": "Start 7-day free trial",
 
     // Bento Grid
     "bento.visualize.title": "Visualize your leads",
@@ -121,7 +121,7 @@ const translations: Record<Language, Record<string, string>> = {
     "features.revisions.desc": "Revise your designs until you're 100% satisfied. No limits.",
     "features.unique.title": "Unique & All Yours",
     "features.unique.desc": "All your designs are crafted especially for you.",
-    "features.cta": "Book a 15-min call",
+    "features.cta": "Start 7-day free trial",
 
     // Solutions
     "solutions.label": "Solutions",
@@ -177,6 +177,7 @@ const translations: Record<Language, Record<string, string>> = {
     "pricing.enterprise.feature5": "Custom onboarding",
     "pricing.enterprise.feature6": "Custom integrations",
     "pricing.enterprise.cta": "Contact sales",
+    "pricing.trial": "7-day free trial",
 
     // FAQ
     "faq.label": "FAQ",
@@ -194,14 +195,14 @@ const translations: Record<Language, Record<string, string>> = {
     "faq.q5": "Does the AI replace human agents?",
     "faq.a5": "No! The AI handles initial conversations and lead qualification, freeing you to focus on closing deals. Important conversations are automatically transferred to you.",
     "faq.q6": "Do you offer a free trial?",
-    "faq.a6": "Yes! We offer a 14-day free trial on all plans. No credit card required.",
+    "faq.a6": "Yes! We offer a 7-day free trial on all plans. No credit card required.",
 
     // CTA
     "cta.title": "Ready to get",
     "cta.titleHighlight": "started?",
     "cta.subtitle": "Join thousands of real estate professionals who never miss a lead with Alloha.",
     "cta.button": "Start free trial",
-    "cta.note": "No credit card required • 14 days free • Cancel anytime",
+    "cta.note": "No credit card required • 7 days free • Cancel anytime",
 
     // Footer
     "footer.privacy": "Privacy",
@@ -216,7 +217,7 @@ const translations: Record<Language, Record<string, string>> = {
     "nav.features": "Recursos",
     "nav.pricing": "Preços",
     "nav.faq": "FAQ",
-    "nav.bookCall": "Agendar ligação",
+    "nav.bookCall": "Testar grátis",
 
     // Hero
     "hero.urgency": "Corra, restam apenas",
@@ -228,7 +229,7 @@ const translations: Record<Language, Record<string, string>> = {
     "hero.subtitleHighlight": "ilimitadas",
     "hero.subtitle2": " e ultrarrápidas.",
     "hero.ctaPrimary": "Começar grátis",
-    "hero.ctaSecondary": "Ver demo",
+    "hero.ctaSecondary": "Entrar para configurar",
     "hero.socialProof": "Nossos clientes são destaque em",
 
     // Phone Chat
@@ -270,7 +271,7 @@ const translations: Record<Language, Record<string, string>> = {
     "process.step2.desc": "Receba seu design em até dois dias úteis em média.",
     "process.step3.title": "Revise",
     "process.step3.desc": "Revisaremos os designs até você estar 100% satisfeito.",
-    "process.cta": "Agendar ligação de 15 min",
+    "process.cta": "Testar grátis por 7 dias",
 
     // Bento Grid
     "bento.visualize.title": "Visualize seus leads",
@@ -316,7 +317,7 @@ const translations: Record<Language, Record<string, string>> = {
     "features.revisions.desc": "Revise seus designs até estar 100% satisfeito. Sem limites.",
     "features.unique.title": "Único e Todo Seu",
     "features.unique.desc": "Todos os seus designs são criados especialmente para você.",
-    "features.cta": "Agendar ligação de 15 min",
+    "features.cta": "Testar grátis por 7 dias",
 
     // Solutions
     "solutions.label": "Soluções",
@@ -350,7 +351,7 @@ const translations: Record<Language, Record<string, string>> = {
     "pricing.starter.feature5": "Respostas em até 5 segundos",
     "pricing.starter.cta": "Começar agora",
     "pricing.pro.name": "Professional",
-    "pricing.pro.price": "R$997",
+    "pricing.pro.price": "R$197",
     "pricing.pro.period": "/mês",
     "pricing.pro.desc": "Ideal para imobiliárias em crescimento",
     "pricing.pro.feature1": "5 números de WhatsApp",
@@ -372,6 +373,7 @@ const translations: Record<Language, Record<string, string>> = {
     "pricing.enterprise.feature5": "Onboarding personalizado",
     "pricing.enterprise.feature6": "Integrações customizadas",
     "pricing.enterprise.cta": "Falar com vendas",
+    "pricing.trial": "Testar grátis 7 dias",
 
     // FAQ
     "faq.label": "FAQ",
@@ -389,14 +391,14 @@ const translations: Record<Language, Record<string, string>> = {
     "faq.q5": "A IA substitui corretores humanos?",
     "faq.a5": "Não! A IA cuida das conversas iniciais e qualificação de leads, liberando você para focar em fechar negócios. Conversas importantes são transferidas para você automaticamente.",
     "faq.q6": "Vocês oferecem teste gratuito?",
-    "faq.a6": "Sim! Oferecemos 14 dias de teste gratuito em todos os planos. Sem necessidade de cartão de crédito.",
+    "faq.a6": "Sim! Oferecemos 7 dias de teste gratuito em todos os planos. Sem necessidade de cartão de crédito.",
 
     // CTA
     "cta.title": "Pronto para",
     "cta.titleHighlight": "começar?",
     "cta.subtitle": "Junte-se a milhares de profissionais imobiliários que nunca perdem um lead com Alloha.",
     "cta.button": "Iniciar teste grátis",
-    "cta.note": "Sem cartão de crédito • 14 dias grátis • Cancele quando quiser",
+    "cta.note": "Sem cartão de crédito • 7 dias grátis • Cancele quando quiser",
 
     // Footer
     "footer.privacy": "Privacidade",

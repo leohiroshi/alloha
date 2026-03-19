@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app \
+    PORT=8080 \
+    DEPLOY_PROFILE=cloudrun_mvp \
+    ALLOW_REDIS_MEMORY_FALLBACK=1 \
+    ENABLE_PROPERTY_EMBEDDINGS=0 \
+    ENABLE_SCRAPER_FALLBACK=0 \
+    PRIMARY_PROVIDER=openrouter_free \
+    FALLBACK_POLICY=hard_stop \
+    MODEL_TIMEOUT_SECONDS=20
+
+COPY requirements-cloudrun.txt /app/requirements-cloudrun.txt
+RUN pip install --no-cache-dir -r /app/requirements-cloudrun.txt
+
+COPY app /app/app
+
+RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8080
+
+CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

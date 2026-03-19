@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
+import time
 from typing import Optional, Any, Callable
 
 try:
@@ -32,8 +33,52 @@ logger = logging.getLogger(__name__)
 
 _redis_client: Optional[RedisType] = None
 _init_lock = asyncio.Lock()
+_memory_store: dict[str, tuple[str, float | None]] = {}
+_memory_lock = asyncio.Lock()
 
 DEFAULT_TIMEOUT = 2.5  # segundos para operações simples
+
+
+def _memory_fallback_enabled() -> bool:
+    return os.getenv("ALLOW_REDIS_MEMORY_FALLBACK", "1").strip() != "0"
+
+
+async def _memory_get(key: str) -> Optional[str]:
+    async with _memory_lock:
+        item = _memory_store.get(key)
+        if not item:
+            return None
+        value, expires_at = item
+        if expires_at is not None and expires_at <= time.time():
+            _memory_store.pop(key, None)
+            return None
+        return value
+
+
+async def _memory_set(key: str, value: Any, ex: int | None = None, nx: bool = False) -> bool:
+    if not _memory_fallback_enabled():
+        return False
+    expires_at = time.time() + ex if ex else None
+    async with _memory_lock:
+        existing = _memory_store.get(key)
+        if existing:
+            _, existing_expires_at = existing
+            if existing_expires_at is not None and existing_expires_at <= time.time():
+                _memory_store.pop(key, None)
+                existing = None
+        if nx and existing is not None:
+            return False
+        _memory_store[key] = (str(value), expires_at)
+        return True
+
+
+async def _memory_delete(key: str) -> None:
+    async with _memory_lock:
+        _memory_store.pop(key, None)
+
+
+def using_memory_fallback() -> bool:
+    return _memory_fallback_enabled() and _redis_client is None
 
 
 def _build_url() -> Optional[str]:
@@ -84,57 +129,64 @@ async def close():  # pragma: no cover
 async def get(key: str) -> Optional[str]:
     client = await get_client()
     if not client:
-        return None
+        return await _memory_get(key)
     try:
         return await asyncio.wait_for(client.get(key), timeout=DEFAULT_TIMEOUT)
     except Exception:
-        return None
+        return await _memory_get(key)
 
 
 async def set(key: str, value: Any, ex: int | None = None):
     client = await get_client()
     if not client:
-        return False
+        return await _memory_set(key, value, ex=ex)
     try:
         await asyncio.wait_for(client.set(key, value, ex=ex), timeout=DEFAULT_TIMEOUT)
         return True
     except Exception:
-        return False
+        return await _memory_set(key, value, ex=ex)
 
 
 async def incr(key: str, ex: int | None = None) -> int:
     client = await get_client()
     if not client:
-        return 0
+        current = await _memory_get(key)
+        next_value = int(current or 0) + 1
+        saved = await _memory_set(key, str(next_value), ex=ex)
+        return next_value if saved else 0
     try:
         val = await asyncio.wait_for(client.incr(key), timeout=DEFAULT_TIMEOUT)
         if ex:
             await client.expire(key, ex)
         return int(val)
     except Exception:
-        return 0
+        current = await _memory_get(key)
+        next_value = int(current or 0) + 1
+        saved = await _memory_set(key, str(next_value), ex=ex)
+        return next_value if saved else 0
 
 
 async def acquire_lock(lock_key: str, ttl: int = 10) -> bool:
     client = await get_client()
     if not client:
-        return False
+        return await _memory_set(lock_key, "1", ex=ttl, nx=True)
     try:
         # SET key value NX EX ttl
         res = await client.set(lock_key, "1", ex=ttl, nx=True)
         return bool(res)
     except Exception:
-        return False
+        return await _memory_set(lock_key, "1", ex=ttl, nx=True)
 
 
 async def release_lock(lock_key: str):  # pragma: no cover
     client = await get_client()
     if not client:
+        await _memory_delete(lock_key)
         return
     try:
         await client.delete(lock_key)
     except Exception:
-        pass
+        await _memory_delete(lock_key)
 
 
 async def rate_limit(key: str, limit: int, window_seconds: int) -> tuple[bool, int]:

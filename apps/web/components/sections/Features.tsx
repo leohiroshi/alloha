@@ -3,11 +3,13 @@
 import { useRef } from "react";
 import { motion, useInView } from "framer-motion";
 import { MessageSquare, Zap, Shield, TrendingUp, Clock, Globe } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { MagneticButton } from "../ui/MagneticButton";
 
 export function Features() {
   const { t } = useLanguage();
+  const router = useRouter();
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: "-100px" });
 
@@ -68,7 +70,7 @@ export function Features() {
           ))}
         </div>
 
-        <MagneticButton className="bg-[#FF5500] text-black font-semibold px-8 py-3 rounded-full">
+        <MagneticButton onClick={() => router.push("/login?mode=signup")} className="bg-[#FF5500] text-black font-semibold px-8 py-3 rounded-full">
           {t("features.cta")}
         </MagneticButton>
       </div>

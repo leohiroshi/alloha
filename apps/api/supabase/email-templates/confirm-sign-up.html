@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-BR">
+  <body style="margin:0;padding:0;background:#050505;font-family:Arial,sans-serif;color:#f7f3ef;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#050505;padding:24px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#0b0b0b;border:1px solid #1a1a1a;border-radius:28px;overflow:hidden;">
+            <tr>
+              <td style="padding:32px;background:radial-gradient(circle at top right, rgba(255,122,47,0.18), transparent 34%), radial-gradient(circle at bottom left, rgba(255,255,255,0.05), transparent 28%), #0b0b0b;">
+                <div style="display:inline-block;padding:10px 14px;border-radius:999px;border:1px solid #252525;background:#111111;color:#ff9a66;font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;">
+                  Alloha
+                </div>
+                <h1 style="margin:20px 0 0;font-size:34px;line-height:1.05;letter-spacing:-0.04em;color:#fff8f2;">
+                  Confirme seu e-mail
+                </h1>
+                <p style="margin:14px 0 0;font-size:16px;line-height:1.75;color:rgba(255,248,242,0.72);">
+                  Sua conta está quase pronta. Confirme seu e-mail para ativar o acesso e continuar na Alloha.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 8px;">
+                <a href="{{ .ConfirmationURL }}" style="display:inline-block;padding:16px 22px;border-radius:18px;background:linear-gradient(180deg,#ff8a4b 0%,#ff5e14 100%);color:#fff8f2;text-decoration:none;font-size:15px;font-weight:700;">
+                  Confirmar e-mail
+                </a>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:12px 32px 0;">
+                <p style="margin:0;font-size:13px;line-height:1.8;color:rgba(255,248,242,0.54);">
+                  Se o botão não funcionar, copie e cole este link no navegador:
+                </p>
+                <p style="margin:10px 0 0;word-break:break-all;font-size:13px;line-height:1.8;color:#ffb48f;">
+                  <a href="{{ .ConfirmationURL }}" style="color:#ffb48f;text-decoration:underline;">{{ .ConfirmationURL }}</a>
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 32px 32px;">
+                <div style="border-top:1px solid #1e1e1e;padding-top:18px;">
+                  <p style="margin:0;font-size:13px;line-height:1.8;color:rgba(255,248,242,0.54);">
+                    Se você não criou essa conta, pode ignorar este e-mail com segurança.
+                  </p>
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

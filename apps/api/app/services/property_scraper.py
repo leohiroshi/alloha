@@ -62,6 +62,8 @@ class AllegaPropertyScraper:
 
         # GPT/OpenAI model
         self.openai_model = os.getenv("OPENAI_MODEL")
+        # Cost guardrail: enrichment is opt-in.
+        self.enable_gpt_enrichment = os.getenv("SCRAPER_GPT_ENRICHMENT", "0") == "1"
 
     # Supabase client já está disponível via import
 
@@ -243,6 +245,9 @@ class AllegaPropertyScraper:
 
     async def enhance_property_with_gpt(self, property_data: Dict[str, Any]) -> Dict[str, Any]:
         """Enriquece dados do imóvel usando o GPT/OpenAI (call_gpt)"""
+        if not self.enable_gpt_enrichment:
+            property_data['ai_enhanced'] = False
+            return property_data
         if not property_data.get('description') and not property_data.get('title'):
             return property_data
 
@@ -288,6 +293,8 @@ class AllegaPropertyScraper:
     async def generate_market_insights(self, properties: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Gera insights de mercado via GPT usando um resumo dos dados extraídos"""
         if not properties:
+            return self._get_fallback_insights(properties)
+        if not self.enable_gpt_enrichment:
             return self._get_fallback_insights(properties)
 
         summary = {
@@ -493,7 +500,7 @@ async def monitor_scraper(interval_minutes: int = 30, max_properties: int = 100)
             if removed_count:
                 logger.info(f"Removidos {removed_count} imóveis do Supabase")
 
-            if scraped_properties:
+            if scraped_properties and scraper.enable_gpt_enrichment:
                 insights = await scraper.generate_market_insights(scraped_properties)
                 logger.info(f"Insights: {insights.get('ai_insights','N/A')[:120]}")
 

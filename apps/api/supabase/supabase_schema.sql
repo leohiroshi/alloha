@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm; -- Full-text search
 
 -- ====================================================================
 -- TABLE: properties
--- Imóveis com suporte a vector search
+-- ImÃ³veis com suporte a vector search
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS properties (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -30,7 +30,11 @@ CREATE TABLE IF NOT EXISTS properties (
     source TEXT, -- sciensa, sincroniza_imoveis, manual
     external_id TEXT,
     last_sync_at TIMESTAMPTZ,
-    embedding vector(1536), -- Embedding para busca semântica (OpenAI text-embedding-3-small)
+    source_updated_at TIMESTAMPTZ,
+    content_hash TEXT,
+    last_seen_at TIMESTAMPTZ,
+    is_deleted BOOLEAN DEFAULT false,
+    embedding vector(384), -- Embedding para busca semantica local (low-cost)
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -41,12 +45,12 @@ CREATE INDEX idx_properties_price ON properties(price);
 CREATE INDEX idx_properties_status ON properties(status);
 CREATE INDEX idx_properties_type ON properties(property_type);
 CREATE INDEX idx_properties_created ON properties(created_at DESC);
-CREATE INDEX idx_properties_embedding ON properties USING ivfflat (embedding vector_cosine_ops) WITH (lists = 200); -- lists maior para melhor recall em 1536 dims
+CREATE INDEX idx_properties_embedding ON properties USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX idx_properties_fulltext ON properties USING gin(to_tsvector('portuguese', title || ' ' || COALESCE(description, '')));
 
 -- ====================================================================
 -- TABLE: conversations
--- Conversações do WhatsApp com state machine
+-- ConversaÃ§Ãµes do WhatsApp com state machine
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -89,7 +93,7 @@ CREATE INDEX idx_messages_created ON messages(created_at DESC);
 
 -- ====================================================================
 -- TABLE: leads
--- Leads qualificados com histórico
+-- Leads qualificados com histÃ³rico
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS leads (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -117,7 +121,7 @@ CREATE INDEX idx_leads_created ON leads(created_at DESC);
 
 -- ====================================================================
 -- TABLE: urgency_alerts
--- Alertas de urgência para corretores
+-- Alertas de urgÃªncia para corretores
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS urgency_alerts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -138,7 +142,7 @@ CREATE INDEX idx_urgency_unresolved ON urgency_alerts(resolved_at) WHERE resolve
 
 -- ====================================================================
 -- TABLE: scheduled_visits
--- Agendamentos automáticos via Google Calendar
+-- Agendamentos automÃ¡ticos via Google Calendar
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS scheduled_visits (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -162,7 +166,7 @@ CREATE INDEX idx_visits_status ON scheduled_visits(status);
 
 -- ====================================================================
 -- TABLE: voice_interactions
--- Histórico de interações de voz (PTT)
+-- HistÃ³rico de interaÃ§Ãµes de voz (PTT)
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS voice_interactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -210,13 +214,13 @@ CREATE INDEX idx_whitelabel_status ON white_label_sites(deployment_status);
 
 -- ====================================================================
 -- TABLE: embedding_cache
--- Cache de embeddings para otimização
+-- Cache de embeddings para otimizaÃ§Ã£o
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS embedding_cache (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     text_hash TEXT UNIQUE NOT NULL,
     text_content TEXT NOT NULL,
-    embedding vector(1536),
+    embedding vector(384),
     model TEXT DEFAULT 'text-embedding-3-small',
     hit_count INTEGER DEFAULT 0,
     last_hit_at TIMESTAMPTZ,
@@ -231,7 +235,7 @@ CREATE INDEX idx_cache_embedding ON embedding_cache USING ivfflat (embedding vec
 
 -- ====================================================================
 -- TABLE: webhook_idempotency
--- Prevenção de duplicação de webhooks
+-- PrevenÃ§Ã£o de duplicaÃ§Ã£o de webhooks
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS webhook_idempotency (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -299,19 +303,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Agendar limpezas diárias às 3h AM
+-- Agendar limpezas diÃ¡rias Ã s 3h AM
 SELECT cron.schedule('cleanup-messages', '0 3 * * *', 'SELECT cleanup_old_messages()');
 SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache()');
 
 -- ====================================================================
--- FUNCTIONS: Busca híbrida (Vector + Full-text)
+-- FUNCTIONS: Busca hÃ­brida (Vector + Full-text)
 -- ====================================================================
--- NOTE: Função especializada somente vetorial (OpenAI 1536 dims) usada pelo código Python:
+-- NOTE: FunÃ§Ã£o especializada somente vetorial (perfil local 384 dims) usada pelo cÃ³digo Python:
 -- DROP FUNCTION IF EXISTS public.vector_property_search(vector, double precision, integer);
 -- CREATE OR REPLACE FUNCTION public.vector_property_search(
---     query_embedding vector(1536),            -- Embedding de consulta (1536 dims OpenAI)
---     match_threshold double precision DEFAULT 0.30, -- Similaridade mínima (0-1)
---     match_count integer DEFAULT 10                 -- Número máximo de resultados
+--     query_embedding vector(384),            -- Embedding de consulta (384 dims)
+--     match_threshold double precision DEFAULT 0.30, -- Similaridade mÃ­nima (0-1)
+--     match_count integer DEFAULT 10                 -- NÃºmero mÃ¡ximo de resultados
 -- )
 -- RETURNS TABLE(
 --     property_id text,
@@ -326,7 +330,7 @@ SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache
 --   RETURN QUERY
 --   SELECT
 --     p.property_id,
---     COALESCE(p.title, '(sem título)') AS title,
+--     COALESCE(p.title, '(sem tÃ­tulo)') AS title,
 --     LEFT(COALESCE(p.ai_analysis, p.description, ''), 600) AS description,
 --     p.url,
 --     p.price,
@@ -339,9 +343,9 @@ SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache
 --   LIMIT match_count;
 -- END;
 -- $$;
--- Código Python chama parâmetros: query_embedding, match_threshold, match_count.
+-- CÃ³digo Python chama parÃ¢metros: query_embedding, match_threshold, match_count.
 CREATE OR REPLACE FUNCTION hybrid_property_search(
-    query_embedding vector(1536),
+    query_embedding vector(384),
     query_text TEXT,
     match_threshold FLOAT DEFAULT 0.7,
     max_results INTEGER DEFAULT 10
@@ -395,7 +399,7 @@ ALTER TABLE white_label_sites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE embedding_cache ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhook_idempotency ENABLE ROW LEVEL SECURITY;
 
--- Política: Service role pode fazer tudo
+-- PolÃ­tica: Service role pode fazer tudo
 CREATE POLICY "Service role has full access" ON properties FOR ALL USING (auth.role() = 'service_role');
 CREATE POLICY "Service role has full access" ON conversations FOR ALL USING (auth.role() = 'service_role');
 CREATE POLICY "Service role has full access" ON messages FOR ALL USING (auth.role() = 'service_role');
@@ -411,7 +415,7 @@ CREATE POLICY "Service role has full access" ON webhook_idempotency FOR ALL USIN
 -- VIEWS: Analytics & Monitoring
 -- ====================================================================
 
--- View: Estatísticas de urgência
+-- View: EstatÃ­sticas de urgÃªncia
 CREATE OR REPLACE VIEW urgency_stats AS
 SELECT 
     DATE(created_at) AS date,
@@ -424,7 +428,7 @@ WHERE created_at > NOW() - INTERVAL '30 days'
 GROUP BY DATE(created_at), urgency_level
 ORDER BY date DESC, urgency_level DESC;
 
--- View: Conversões de leads
+-- View: ConversÃµes de leads
 CREATE OR REPLACE VIEW lead_conversion_funnel AS
 SELECT 
     DATE(created_at) AS date,
@@ -453,27 +457,27 @@ ORDER BY date DESC;
 -- INITIAL DATA / SEED
 -- ====================================================================
 
--- Inserir template padrão de white-label
+-- Inserir template padrÃ£o de white-label
 INSERT INTO white_label_sites (site_id, domain, broker_name, template_id, deployment_status)
 VALUES ('demo', 'demo.alloha.com.br', 'Demo Broker', 'modern_minimal', 'active')
 ON CONFLICT (site_id) DO NOTHING;
 
 -- ====================================================================
--- GRANTS: Permissões para roles
+-- GRANTS: PermissÃµes para roles
 -- ====================================================================
 
--- Grant para anon (acesso público limitado)
+-- Grant para anon (acesso pÃºblico limitado)
 GRANT SELECT ON properties TO anon;
 GRANT SELECT ON white_label_sites TO anon;
 
--- Grant para authenticated (usuários autenticados)
+-- Grant para authenticated (usuÃ¡rios autenticados)
 GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;
 
 -- ====================================================================
--- COMPLETE ✅
+-- COMPLETE âœ…
 -- ====================================================================
--- Schema pronto para migração!
+-- Schema pronto para migraÃ§Ã£o!
 -- Execute: supabase db push --file scripts/supabase_schema.sql
 -- ====================================================================

@@ -7,9 +7,9 @@ export function Footer() {
   const { t } = useLanguage();
   
   const footerLinks = [
-    { key: "footer.privacy", href: "#" },
-    { key: "footer.terms", href: "#" },
-    { key: "footer.contact", href: "#" },
+    { key: "footer.privacy", href: "/privacy" },
+    { key: "footer.terms", href: "/terms" },
+    { key: "footer.contact", href: "/contact" },
   ];
   
   return (

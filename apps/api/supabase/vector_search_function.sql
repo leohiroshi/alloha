@@ -1,37 +1,36 @@
--- Função para busca vetorial no Supabase usando pgvector
--- Execute este SQL no SQL Editor do Supabase Dashboard
+-- Canonical vector search function for properties table (pgvector 384).
+-- Keep this file aligned with migrations that manage vector dimensions.
 
-CREATE OR REPLACE FUNCTION vector_property_search(
+CREATE OR REPLACE FUNCTION public.vector_property_search(
   query_embedding vector(384),
-  match_threshold float DEFAULT 1.5,
-  max_results int DEFAULT 10
+  match_threshold double precision DEFAULT 0.30,
+  match_count integer DEFAULT 10
 )
 RETURNS TABLE (
-  id uuid,
   property_id text,
-  content text,
-  metadata jsonb,
-  distance float
+  title text,
+  description text,
+  url text,
+  price numeric,
+  bedrooms_int integer,
+  similarity double precision
 )
-LANGUAGE plpgsql
+LANGUAGE sql
+STABLE
 AS $$
-BEGIN
-  RETURN QUERY
-  SELECT 
-    pe.id,
-    pe.property_id,
-    pe.content,
-    pe.metadata,
-    (pe.embedding <-> query_embedding) AS distance
-  FROM property_embeddings pe
-  WHERE (pe.embedding <-> query_embedding) < match_threshold
-  ORDER BY distance
-  LIMIT max_results;
-END;
+  SELECT
+    p.property_id,
+    p.title,
+    p.description,
+    p.url,
+    p.price,
+    p.bedrooms AS bedrooms_int,
+    1 - (p.embedding <=> query_embedding) AS similarity
+  FROM public.properties p
+  WHERE p.embedding IS NOT NULL
+    AND COALESCE(p.is_deleted, false) = false
+    AND COALESCE(p.status, 'active') = 'active'
+    AND (1 - (p.embedding <=> query_embedding)) >= match_threshold
+  ORDER BY p.embedding <=> query_embedding
+  LIMIT match_count;
 $$;
-
--- Comentário sobre a função:
--- Esta função usa o operador <-> do pgvector para calcular distância cosseno
--- Quanto MENOR a distância, mais similar é o conteúdo
--- match_threshold: limite de distância (default 1.5)
--- max_results: número máximo de resultados (default 10)

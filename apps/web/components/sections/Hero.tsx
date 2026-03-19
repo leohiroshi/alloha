@@ -1,7 +1,8 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowRight, Play } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { MagneticButton } from "../ui/MagneticButton";
 import { FloatingPhone } from "../hero/FloatingPhone";
@@ -10,6 +11,7 @@ import { StatsBubble } from "../hero/StatsBubble";
 
 export function Hero() {
   const { t } = useLanguage();
+  const router = useRouter();
   
   return (
     <section className="relative min-h-screen flex flex-col items-center justify-center pt-32 pb-20 px-6">
@@ -62,14 +64,21 @@ export function Hero() {
         transition={{ duration: 0.8, delay: 0.3 }}
         className="flex flex-col sm:flex-row gap-4 mb-16"
       >
-        <MagneticButton className="group bg-[#FF5500] hover:bg-[#FF6600] text-black font-bold px-8 py-4 rounded-full text-base transition-colors">
+        <MagneticButton
+          onClick={() => router.push("/signup")}
+          className="group bg-[#FF5500] hover:bg-[#FF6600] text-black font-bold px-8 py-4 rounded-full text-base transition-colors"
+        >
           <span className="flex items-center gap-2">
             {t("hero.ctaPrimary")}
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </span>
         </MagneticButton>
-        <MagneticButton className="flex items-center gap-2 text-white/80 hover:text-white font-medium px-8 py-4 rounded-full border border-white/20 hover:border-white/40 transition-colors" variant="secondary">
-          <Play className="w-4 h-4" />
+        <MagneticButton
+          onClick={() => router.push("/login?mode=signup")}
+          className="flex items-center gap-2 text-white/80 hover:text-white font-medium px-8 py-4 rounded-full border border-white/20 hover:border-white/40 transition-colors"
+          variant="secondary"
+        >
+          <Sparkles className="w-4 h-4" />
           {t("hero.ctaSecondary")}
         </MagneticButton>
       </motion.div>

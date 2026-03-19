@@ -17,7 +17,7 @@ export function Benefits() {
   ];
 
   return (
-    <section ref={ref} className="py-24 px-6">
+    <section ref={ref} id="about" className="py-24 px-6">
       <div className="max-w-6xl mx-auto">
         <div className="grid lg:grid-cols-2 gap-16 items-center">
           {/* Left - Text */}
