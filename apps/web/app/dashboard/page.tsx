@@ -15,6 +15,11 @@ import {
 } from "lucide-react";
 import { clearAllohaAuth, resolveAuthenticatedSession } from "@/lib/auth-session";
 import api from "@/lib/api";
+import {
+  loadMetaEmbeddedSignupSdk,
+  META_EMBEDDED_SIGNUP_ALLOWED_ORIGINS,
+  parseMetaEmbeddedSignupMessage,
+} from "@/lib/meta-embedded-signup";
 
 type Profile = {
   sub?: string;
@@ -29,12 +34,53 @@ type OnboardingStatus = {
   ingest_in_progress: boolean;
   first_scrape_completed: boolean;
   first_scrape_started_at?: string;
+  whatsapp?: {
+    provider?: string;
+    connected?: boolean;
+    embedded_signup_ready?: boolean;
+    app_id?: string | null;
+    embedded_signup_config_id?: string | null;
+    token_exchange_ready?: boolean;
+    js_sdk_version?: string | null;
+    current_phone_number_id?: string | null;
+    next_step_url?: string | null;
+  };
+  whatsapp_signup?: {
+    event?: string;
+    source?: string;
+    captured_at?: string;
+    code_received?: boolean;
+    token_exchange_ready?: boolean;
+    waba_id?: string | null;
+    phone_number_id?: string | null;
+    display_phone_number?: string | null;
+    session_id?: string | null;
+    current_step?: string | null;
+    error_message?: string | null;
+    error_id?: string | null;
+  } | null;
   config?: {
     business_name?: string;
     owner_name?: string;
     whatsapp_phone?: string;
+    whatsapp_number_mode?: string;
     city?: string;
+    website_url?: string;
   };
+  site_inspection?: {
+    provided?: boolean;
+    normalized_url?: string;
+    reachable?: boolean;
+    http_status?: number | null;
+    final_url?: string | null;
+    host?: string | null;
+    page_title?: string | null;
+    platform_hint?: string | null;
+    scrape_supported?: boolean;
+    recommended_source?: string;
+    ready_for_ingest?: boolean;
+    message?: string;
+  } | null;
   last_result?: {
     success?: boolean;
     message?: string;
@@ -61,6 +107,38 @@ function formatTimestamp(value?: string) {
   }
 }
 
+function formatRecommendedSource(value?: string) {
+  switch (value) {
+    case "official_feed":
+      return "Fonte oficial";
+    case "scraper_fallback":
+      return "Scraper compatível";
+    case "scraper_supported_but_disabled":
+      return "Scraper compatível, mas desligado";
+    case "manual_review":
+      return "Revisão manual";
+    case "site_required":
+      return "Site obrigatório";
+    default:
+      return "Aguardando validação";
+  }
+}
+
+function formatMetaEvent(value?: string) {
+  switch (value) {
+    case "FINISH":
+      return "Concluído";
+    case "CANCEL":
+      return "Cancelado";
+    case "ERROR":
+      return "Erro";
+    case "CODE_RECEIVED":
+      return "Código recebido";
+    default:
+      return value || "Sem retorno";
+  }
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [sessionToken, setSessionToken] = useState("");
@@ -68,12 +146,18 @@ export default function DashboardPage() {
   const [businessName, setBusinessName] = useState("Alloha Imóveis");
   const [ownerName, setOwnerName] = useState("Equipe Alloha");
   const [whatsappPhone, setWhatsappPhone] = useState("");
+  const [whatsappNumberMode, setWhatsappNumberMode] = useState<"existing" | "new">("existing");
   const [city, setCity] = useState("São Paulo");
+  const [websiteUrl, setWebsiteUrl] = useState("");
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [metaSdkReady, setMetaSdkReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const whatsappSetup = status?.whatsapp || null;
+  const whatsappSignup = status?.whatsapp_signup || null;
 
   useEffect(() => {
     const load = async () => {
@@ -99,7 +183,13 @@ export default function DashboardPage() {
         setBusinessName(config.business_name || defaultsResponse.defaults.business_name);
         setOwnerName(config.owner_name || nextProfile?.name || defaultsResponse.defaults.owner_name);
         setWhatsappPhone(config.whatsapp_phone || defaultsResponse.defaults.whatsapp_phone);
+        setWhatsappNumberMode(
+          (config.whatsapp_number_mode as "existing" | "new") ||
+            (defaultsResponse.defaults.whatsapp_number_mode as "existing" | "new") ||
+            "existing"
+        );
         setCity(config.city || defaultsResponse.defaults.city);
+        setWebsiteUrl(config.website_url || defaultsResponse.defaults.website_url);
       } catch (currentError) {
         const nextError = currentError instanceof Error ? currentError.message : "Não foi possível carregar o painel.";
         if (nextError.toLowerCase().includes("session") || nextError.toLowerCase().includes("auth token")) {
@@ -135,6 +225,84 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [sessionToken, status?.ingest_in_progress]);
 
+  useEffect(() => {
+    if (!whatsappSetup?.app_id || !whatsappSetup?.embedded_signup_config_id) {
+      setMetaSdkReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    void loadMetaEmbeddedSignupSdk(
+      whatsappSetup.app_id,
+      whatsappSetup.js_sdk_version || "v23.0"
+    )
+      .then(() => {
+        if (!cancelled) {
+          setMetaSdkReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMetaSdkReady(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    whatsappSetup?.app_id,
+    whatsappSetup?.embedded_signup_config_id,
+    whatsappSetup?.js_sdk_version,
+  ]);
+
+  useEffect(() => {
+    if (!sessionToken) {
+      return;
+    }
+
+    const handleMetaMessage = (event: MessageEvent) => {
+      if (!META_EMBEDDED_SIGNUP_ALLOWED_ORIGINS.includes(event.origin)) {
+        return;
+      }
+
+      const payload = parseMetaEmbeddedSignupMessage(event.data);
+      if (!payload) {
+        return;
+      }
+
+      setMetaBusy(false);
+      void (async () => {
+        try {
+          const result = await api.saveWhatsAppEmbeddedSignup(
+            {
+              event: String(payload.event || "MESSAGE_EVENT"),
+              data:
+                payload.data && typeof payload.data === "object"
+                  ? (payload.data as Record<string, unknown>)
+                  : {},
+              raw: payload,
+              source: "meta_post_message",
+            },
+            sessionToken
+          );
+          const nextStatus = await api.getOnboardingStatus(sessionToken);
+          setStatus(nextStatus);
+          setMessage(result.message);
+        } catch (currentError) {
+          setError(
+            currentError instanceof Error
+              ? currentError.message
+              : "Não foi possível processar o retorno da Meta."
+          );
+        }
+      })();
+    };
+
+    window.addEventListener("message", handleMetaMessage);
+    return () => window.removeEventListener("message", handleMetaMessage);
+  }, [sessionToken]);
+
   const handleLogout = async () => {
     await clearAllohaAuth();
     router.replace("/login");
@@ -143,6 +311,11 @@ export default function DashboardPage() {
   const handleSubmit = async () => {
     if (!sessionToken) {
       router.replace("/login");
+      return;
+    }
+
+    if (!websiteUrl.trim()) {
+      setError("Informe a URL do site da imobiliária antes de continuar.");
       return;
     }
 
@@ -156,7 +329,9 @@ export default function DashboardPage() {
           business_name: businessName,
           owner_name: ownerName,
           whatsapp_phone: whatsappPhone,
+          whatsapp_number_mode: whatsappNumberMode,
           city,
+          website_url: websiteUrl,
           force_full_scrape: true,
         },
         sessionToken
@@ -177,10 +352,98 @@ export default function DashboardPage() {
     }
   };
 
+  const handleLaunchMetaSignup = async () => {
+    if (!sessionToken) {
+      router.replace("/login");
+      return;
+    }
+
+    if (!whatsappSetup?.app_id || !whatsappSetup?.embedded_signup_config_id) {
+      setError("As chaves do Embedded Signup da Meta ainda não estão completas neste ambiente.");
+      return;
+    }
+
+    setMetaBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      await loadMetaEmbeddedSignupSdk(
+        whatsappSetup.app_id,
+        whatsappSetup.js_sdk_version || "v23.0"
+      );
+      setMetaSdkReady(true);
+
+      if (!window.FB) {
+        throw new Error("O SDK da Meta foi carregado, mas não ficou disponível na página.");
+      }
+
+      window.FB.login(
+        async (response) => {
+          try {
+            const code =
+              response &&
+              typeof response === "object" &&
+              "authResponse" in response &&
+              response.authResponse &&
+              typeof response.authResponse === "object" &&
+              "code" in response.authResponse
+                ? response.authResponse.code
+                : null;
+
+            if (typeof code === "string" && code.trim()) {
+              const result = await api.saveWhatsAppEmbeddedSignup(
+                {
+                  event: "CODE_RECEIVED",
+                  code,
+                  data: {},
+                  source: "meta_login_callback",
+                },
+                sessionToken
+              );
+              const nextStatus = await api.getOnboardingStatus(sessionToken);
+              setStatus(nextStatus);
+              setMessage(result.message);
+            } else {
+              setMessage("Fluxo da Meta iniciado. O painel será atualizado assim que houver retorno.");
+            }
+          } catch (currentError) {
+            setError(
+              currentError instanceof Error
+                ? currentError.message
+                : "Não foi possível salvar o retorno da Meta."
+            );
+          } finally {
+            setMetaBusy(false);
+          }
+        },
+        {
+          config_id: whatsappSetup.embedded_signup_config_id,
+          response_type: "code",
+          override_default_response_type: true,
+          extras: {
+            setup: {},
+          },
+        }
+      );
+    } catch (currentError) {
+      setMetaBusy(false);
+      setError(
+        currentError instanceof Error
+          ? currentError.message
+          : "Não foi possível abrir o fluxo oficial da Meta."
+      );
+    }
+  };
+
   const hasConfigured = Boolean(status?.configured);
   const isRunning = Boolean(status?.ingest_in_progress);
   const isCompleted = Boolean(status?.first_scrape_completed && status?.last_result?.success);
   const isFailed = Boolean(status?.last_result && status.last_result.success === false);
+  const siteInspection = status?.site_inspection || null;
+  const siteReadyForIngest = Boolean(siteInspection?.ready_for_ingest);
+  const canSubmit = Boolean(websiteUrl.trim()) && !submitting && !isRunning;
+  const whatsappModeLabel = whatsappNumberMode === "existing" ? "Número existente" : "Número novo";
 
   const stepOneState: StepState = hasConfigured ? "done" : "active";
   const stepTwoState: StepState = isCompleted ? "done" : isRunning || hasConfigured || isFailed ? "active" : "pending";
@@ -192,7 +455,7 @@ export default function DashboardPage() {
     if (isCompleted) {
       return "Salvar ajustes";
     }
-    return "Salvar e iniciar";
+    return "Salvar e validar";
   }, [isCompleted, isRunning]);
 
   const progressTitle = loading
@@ -211,7 +474,7 @@ export default function DashboardPage() {
       ? "A configuração foi salva e a primeira carga já passou."
       : isRunning
         ? "A Alloha está processando a primeira leitura dos imóveis agora."
-        : "Preencha os campos abaixo para iniciar sua primeira carga manual.";
+        : "Preencha o essencial, informe o site e valide a fonte antes da primeira carga.";
 
   if (loading) {
     return (
@@ -320,7 +583,7 @@ export default function DashboardPage() {
               </div>
               <h1 className="mt-6 text-4xl font-semibold tracking-[-0.05em] text-white sm:text-5xl">Configure sua operação</h1>
               <p className="mt-4 max-w-xl text-base leading-8 text-white/58 sm:text-lg">
-                Um fluxo simples para deixar a Alloha pronta para o primeiro uso. Salve os dados básicos e acompanhe a primeira carga no mesmo lugar.
+                Um fluxo simples para deixar a Alloha pronta para o primeiro uso. Salve os dados básicos, informe o site e veja na hora se a fonte já está pronta para importar os imóveis.
               </p>
             </div>
 
@@ -338,8 +601,8 @@ export default function DashboardPage() {
             <div className="mt-12 space-y-1">
               <StepSection
                 step="01"
-                title="Complete os dados básicos"
-                description="Preencha o mínimo necessário para configurar a conta e iniciar a primeira carga manual."
+                title="Complete os dados essenciais"
+                description="Preencha o mínimo necessário para configurar a conta e validar de onde os imóveis serão importados."
                 state={stepOneState}
               >
                 <div className="grid gap-4 md:grid-cols-2">
@@ -358,14 +621,61 @@ export default function DashboardPage() {
                   <InputField label="WhatsApp" helper="Opcional neste primeiro passo.">
                     <input value={whatsappPhone} onChange={(event) => setWhatsappPhone(event.target.value)} placeholder="(opcional)" className="liquid-input" />
                   </InputField>
+
+                  <div className="md:col-span-2">
+                    <InputField label="Integração do WhatsApp" helper="Escolha se vamos integrar um número que já existe ou começar com um número novo na Meta.">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={() => setWhatsappNumberMode("existing")}
+                          className={`rounded-[20px] border px-4 py-4 text-left transition ${
+                            whatsappNumberMode === "existing"
+                              ? "border-[#ff8b47]/30 bg-[#ff5d16]/10 text-white"
+                              : "border-white/8 bg-white/[0.02] text-white/70 hover:border-white/14 hover:text-white"
+                          }`}
+                        >
+                          <span className="block text-sm font-medium">Usar número existente</span>
+                          <span className="mt-2 block text-xs leading-6 text-white/46">
+                            Indicado quando você já opera esse WhatsApp e quer migrar para a API oficial da Meta.
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setWhatsappNumberMode("new")}
+                          className={`rounded-[20px] border px-4 py-4 text-left transition ${
+                            whatsappNumberMode === "new"
+                              ? "border-[#ff8b47]/30 bg-[#ff5d16]/10 text-white"
+                              : "border-white/8 bg-white/[0.02] text-white/70 hover:border-white/14 hover:text-white"
+                          }`}
+                        >
+                          <span className="block text-sm font-medium">Começar com número novo</span>
+                          <span className="mt-2 block text-xs leading-6 text-white/46">
+                            Melhor caminho para reduzir risco no MVP e ligar o bot sem mexer no número principal logo de saída.
+                          </span>
+                        </button>
+                      </div>
+                    </InputField>
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <InputField label="Site da imobiliária" helper="Usamos essa URL para validar o portal e decidir se a primeira carga já pode rodar.">
+                      <input
+                        value={websiteUrl}
+                        onChange={(event) => setWebsiteUrl(event.target.value)}
+                        placeholder="https://www.seusite.com.br"
+                        className="liquid-input"
+                      />
+                    </InputField>
+                  </div>
                 </div>
 
                 <div className="mt-6 flex flex-wrap items-center gap-3">
-                  <button onClick={handleSubmit} disabled={submitting || isRunning} className="aw-btn-primary min-h-[50px] px-5 text-sm disabled:opacity-60">
+                  <button onClick={handleSubmit} disabled={!canSubmit} className="aw-btn-primary min-h-[50px] px-5 text-sm disabled:opacity-60">
                     {submitting ? "Salvando..." : primaryLabel}
                     <ArrowRight className="h-4 w-4" />
                   </button>
-                  <p className="text-sm text-white/42">Ao continuar, a primeira carga começa automaticamente.</p>
+                  <p className="text-sm text-white/42">Se o site for compatível com a fonte atual, a primeira carga começa automaticamente.</p>
                 </div>
 
                 {message ? (
@@ -383,8 +693,8 @@ export default function DashboardPage() {
 
               <StepSection
                 step="02"
-                title="Acompanhe a primeira carga"
-                description="Assim que os dados forem salvos, a Alloha processa a primeira leitura e mostra o resultado aqui."
+                title="Valide a fonte e acompanhe a carga"
+                description="Depois do envio, a Alloha inspeciona o site e informa se a importação já pode começar com a estrutura atual."
                 state={stepTwoState}
                 isLast
               >
@@ -392,10 +702,90 @@ export default function DashboardPage() {
                   <MetricTile label="Sessão" value={profile?.email || "Conectada"} />
                   <MetricTile
                     label="Primeira carga"
-                    value={isRunning ? "Em execução" : isCompleted ? "Concluída" : isFailed ? "Falhou" : "Aguardando"}
-                    accent={isRunning || isCompleted || isFailed}
+                    value={isRunning ? "Em execução" : isCompleted ? "Concluída" : isFailed ? "Falhou" : siteReadyForIngest ? "Pronta para iniciar" : "Aguardando validação"}
+                    accent={isRunning || isCompleted || isFailed || siteReadyForIngest}
                   />
-                  <MetricTile label="Iniciado em" value={formatTimestamp(status?.first_scrape_started_at)} />
+                  <MetricTile label="WhatsApp" value={whatsappModeLabel} accent />
+                </div>
+
+                <div className="mt-5 rounded-[22px] border border-white/8 bg-white/[0.03] p-5 text-sm leading-7 text-white/68">
+                  <p>
+                    Site:{" "}
+                    <strong className="font-semibold text-white">
+                      {siteInspection?.final_url || status?.config?.website_url || "Ainda não informado"}
+                    </strong>
+                  </p>
+                  <p>
+                    Fonte recomendada:{" "}
+                    <strong className="font-semibold text-white">{formatRecommendedSource(siteInspection?.recommended_source)}</strong>
+                  </p>
+                  <p>
+                    Compatibilidade atual:{" "}
+                    <strong className="font-semibold text-white">
+                      {siteInspection?.ready_for_ingest ? "pronta para importar" : "revisão necessária"}
+                    </strong>
+                  </p>
+                  {siteInspection?.page_title ? <p>Título detectado: {siteInspection.page_title}</p> : null}
+                  {siteInspection?.platform_hint ? <p>Plataforma detectada: {siteInspection.platform_hint}</p> : null}
+                  {siteInspection?.message ? <p>Leitura: {siteInspection.message}</p> : null}
+                </div>
+
+                <div className="mt-5 rounded-[22px] border border-white/8 bg-white/[0.03] p-5 text-sm leading-7 text-white/68">
+                  <p>
+                    Provedor: <strong className="font-semibold text-white">Meta Cloud API</strong>
+                  </p>
+                  <p>
+                    Caminho escolhido: <strong className="font-semibold text-white">{whatsappModeLabel}</strong>
+                  </p>
+                  <p>
+                    Integração atual:{" "}
+                    <strong className="font-semibold text-white">
+                      {whatsappSetup?.connected ? "já conectada neste ambiente" : "ainda não conectada"}
+                    </strong>
+                  </p>
+                  <p>
+                    Embedded Signup:{" "}
+                    <strong className="font-semibold text-white">
+                      {whatsappSetup?.embedded_signup_ready ? "pronto para abrir" : "precisa das chaves específicas da Meta"}
+                    </strong>
+                  </p>
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleLaunchMetaSignup}
+                      disabled={!whatsappSetup?.embedded_signup_ready || metaBusy}
+                      className="aw-btn-primary min-h-[46px] px-4 py-2 text-sm disabled:opacity-60"
+                    >
+                      {metaBusy ? "Abrindo Meta..." : metaSdkReady ? "Conectar com a Meta" : "Preparar Meta"}
+                      {metaBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                    </button>
+
+                    <span className="text-xs text-white/42">
+                      {whatsappSetup?.token_exchange_ready
+                        ? "A troca automática do código já pode ser concluída no backend."
+                        : "Ainda falta o segredo do app para concluir a troca automática do código em token."}
+                    </span>
+                  </div>
+                  {whatsappSetup?.next_step_url ? (
+                    <p>
+                      Próximo passo: <a className="text-[#ffc39c] underline underline-offset-4" href={whatsappSetup.next_step_url}>abrir fluxo oficial da Meta</a>
+                    </p>
+                  ) : null}
+                  {whatsappSignup ? (
+                    <div className="mt-4 rounded-[18px] border border-white/8 bg-black/22 p-4 text-xs leading-6 text-white/58">
+                      <p>
+                        Último retorno:{" "}
+                        <strong className="font-semibold text-white">{formatMetaEvent(whatsappSignup.event)}</strong>
+                      </p>
+                      <p>Capturado em: {formatTimestamp(whatsappSignup.captured_at)}</p>
+                      {whatsappSignup.display_phone_number ? <p>Número retornado: {whatsappSignup.display_phone_number}</p> : null}
+                      {whatsappSignup.phone_number_id ? <p>Phone number ID: {whatsappSignup.phone_number_id}</p> : null}
+                      {whatsappSignup.waba_id ? <p>WABA ID: {whatsappSignup.waba_id}</p> : null}
+                      {whatsappSignup.current_step ? <p>Etapa informada pela Meta: {whatsappSignup.current_step}</p> : null}
+                      {whatsappSignup.code_received ? <p>Código temporário recebido pelo frontend e salvo no backend.</p> : null}
+                      {whatsappSignup.error_message ? <p>Detalhe: {whatsappSignup.error_message}</p> : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 {status?.last_result ? (
@@ -409,7 +799,9 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   <div className="mt-5 rounded-[22px] border border-white/8 bg-white/[0.03] p-5 text-sm leading-7 text-white/58">
-                    O resultado da primeira carga aparece aqui assim que o processo terminar.
+                    {siteInspection?.ready_for_ingest
+                      ? "O resultado da primeira carga aparece aqui assim que o processo terminar."
+                      : "Quando o site estiver compatível com a fonte de importação, a primeira carga aparecerá aqui."}
                   </div>
                 )}
 

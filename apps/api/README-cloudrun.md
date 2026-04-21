@@ -14,6 +14,7 @@ Este é o perfil recomendado para manter o backend da Alloha o mais perto possí
 - embeddings locais desligados
 - scraper fallback desligado
 - Redis opcional com fallback em memória
+- recomendado para MVP: Upstash Redis no free tier, usando `rediss://`
 
 ## Arquivos
 
@@ -75,6 +76,19 @@ Ou, se preferir, use o script:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `WEB_AUTH_SUCCESS_URL`
+
+## Redis com custo mínimo
+
+Para o primeiro MVP, a opção mais simples e barata é usar Upstash Redis no free tier. O backend já aceita conexão padrão Redis com TLS, então basta preencher:
+
+- `REDIS_URL=rediss://default:seu-password@seu-endpoint.upstash.io:6379`
+- `ALLOW_REDIS_MEMORY_FALLBACK=1` enquanto você ainda estiver validando a infra
+
+Quando o Redis já estiver estável em produção, você pode mudar para:
+
+- `ALLOW_REDIS_MEMORY_FALLBACK=0`
+
+Assim qualquer falha de conexão fica explícita no health check, em vez de cair silenciosamente no fallback em memória.
 
 ## Validação depois do deploy
 

@@ -29,6 +29,7 @@ from app.services import redis_client
 from app.services.email_service import resend_configured, send_support_ticket, support_email_to
 from app.services.ingest_service import ingest_service
 from app.services.model_gateway import model_gateway
+from app.services.site_inspector import inspect_real_estate_site, normalize_site_url
 from app.services.supabase_client import supabase_client
 from app.services.webhook_idempotency import webhook_idempotency
 from app.services.whatsapp_service import WhatsAppService
@@ -65,6 +66,11 @@ GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
 WEB_AUTH_SUCCESS_URL = os.getenv("WEB_AUTH_SUCCESS_URL", "http://localhost:3000/login/success").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+META_APP_ID = os.getenv("META_APP_ID", "").strip()
+META_APP_SECRET = os.getenv("META_APP_SECRET", "").strip()
+META_EMBEDDED_SIGNUP_CONFIG_ID = os.getenv("META_EMBEDDED_SIGNUP_CONFIG_ID", "").strip()
+META_EMBEDDED_SIGNUP_URL = os.getenv("META_EMBEDDED_SIGNUP_URL", "").strip()
+META_JS_SDK_VERSION = os.getenv("META_JS_SDK_VERSION", "v23.0").strip() or "v23.0"
 
 whatsapp_service = WhatsAppService(ACCESS_TOKEN, PHONE_NUMBER_ID)
 
@@ -104,10 +110,12 @@ class LeadCaptureRequest(BaseModel):
 
 
 class OnboardingBootstrapRequest(BaseModel):
-    business_name: str = Field(default="Alloha Imoveis")
+    business_name: str = Field(default="Alloha Imóveis")
     owner_name: str = Field(default="Equipe Alloha")
     whatsapp_phone: str = Field(default="")
-    city: str = Field(default="Sao Paulo")
+    whatsapp_number_mode: str = Field(default="existing")
+    city: str = Field(default="São Paulo")
+    website_url: str = Field(default="")
     force_full_scrape: bool = Field(default=True)
 
 
@@ -115,15 +123,94 @@ class SupabaseSessionExchangeRequest(BaseModel):
     access_token: str = Field(..., min_length=1)
 
 
+class MetaEmbeddedSignupEventRequest(BaseModel):
+    event: str = Field(..., min_length=1)
+    data: Dict[str, Any] = Field(default_factory=dict)
+    code: Optional[str] = None
+    source: str = Field(default="dashboard")
+    raw: Optional[Dict[str, Any]] = None
+
+
 def _onboarding_defaults() -> Dict[str, Any]:
     return {
-        "business_name": "Alloha Imoveis",
+        "business_name": "Alloha Imóveis",
         "owner_name": "Equipe Alloha",
         "whatsapp_phone": "",
-        "city": "Sao Paulo",
+        "whatsapp_number_mode": "existing",
+        "city": "São Paulo",
+        "website_url": "",
         "force_full_scrape": True,
         "listing_freshness_mode": "first_scrape_only",
     }
+
+
+def _whatsapp_setup_state() -> Dict[str, Any]:
+    embedded_signup_ready = bool(
+        META_EMBEDDED_SIGNUP_URL or (META_APP_ID and META_EMBEDDED_SIGNUP_CONFIG_ID)
+    )
+    return {
+        "provider": "meta_cloud_api",
+        "connected": bool(ACCESS_TOKEN and PHONE_NUMBER_ID),
+        "embedded_signup_ready": embedded_signup_ready,
+        "app_id": META_APP_ID or None,
+        "embedded_signup_config_id": META_EMBEDDED_SIGNUP_CONFIG_ID or None,
+        "token_exchange_ready": bool(META_APP_SECRET),
+        "js_sdk_version": META_JS_SDK_VERSION,
+        "current_phone_number_id": PHONE_NUMBER_ID or None,
+        "next_step_url": META_EMBEDDED_SIGNUP_URL or None,
+    }
+
+
+def _extract_whatsapp_signup_value(data: Dict[str, Any], *keys: str) -> Optional[str]:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, dict):
+            nested_id = value.get("id")
+            if isinstance(nested_id, str) and nested_id.strip():
+                return nested_id.strip()
+    return None
+
+
+def _summarize_whatsapp_signup_event(payload: MetaEmbeddedSignupEventRequest) -> Dict[str, Any]:
+    data = payload.data or {}
+    code_received = bool(payload.code)
+    summary = {
+        "event": payload.event.strip().upper(),
+        "source": payload.source.strip() or "dashboard",
+        "captured_at": _utc_now_iso(),
+        "code_received": code_received,
+        "token_exchange_ready": bool(META_APP_SECRET),
+        "waba_id": _extract_whatsapp_signup_value(
+            data,
+            "waba_id",
+            "business_account_id",
+            "whatsapp_business_account_id",
+            "wabaId",
+        ),
+        "phone_number_id": _extract_whatsapp_signup_value(
+            data,
+            "phone_number_id",
+            "phoneNumberId",
+            "display_phone_number_id",
+            "business_phone_number_id",
+            "phone_number",
+        ),
+        "display_phone_number": _extract_whatsapp_signup_value(
+            data,
+            "display_phone_number",
+            "phone_number",
+            "phoneNumber",
+        ),
+        "session_id": _extract_whatsapp_signup_value(data, "session_id", "sessionId"),
+        "current_step": _extract_whatsapp_signup_value(data, "current_step", "currentStep"),
+        "error_message": _extract_whatsapp_signup_value(data, "error_message", "error", "message"),
+        "error_id": _extract_whatsapp_signup_value(data, "error_id", "errorId"),
+    }
+    return summary
 
 
 def _onboarding_token_is_required() -> bool:
@@ -418,6 +505,7 @@ async def v1_onboarding_defaults(request: Request) -> Dict[str, Any]:
     await _require_authenticated_session(request)
     return {
         "defaults": _onboarding_defaults(),
+        "whatsapp": _whatsapp_setup_state(),
         "setup_token_required": _onboarding_token_is_required(),
         "timestamp": _utc_now_iso(),
     }
@@ -429,12 +517,26 @@ async def v1_onboarding_bootstrap(
     payload: OnboardingBootstrapRequest = Body(default=OnboardingBootstrapRequest()),
 ) -> Dict[str, Any]:
     profile = await _require_authenticated_session(request)
+    if payload.whatsapp_number_mode not in {"existing", "new"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Escolha se o WhatsApp será um número existente ou um número novo.",
+        )
+    normalized_site_url = normalize_site_url(payload.website_url)
+    if not normalized_site_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Informe a URL do site da imobiliária para validar a fonte dos imóveis.",
+        )
+
     setup_id = f"setup-{uuid.uuid4().hex[:10]}"
     configured_at = _utc_now_iso()
     defaults = _onboarding_defaults()
+    site_inspection = await inspect_real_estate_site(normalized_site_url)
     config_payload = {
         **defaults,
         **payload.dict(),
+        "website_url": normalized_site_url,
         "setup_id": setup_id,
         "configured_at": configured_at,
         "configured_by": {
@@ -448,6 +550,11 @@ async def v1_onboarding_bootstrap(
         json.dumps(config_payload, ensure_ascii=False),
         ex=30 * 24 * 60 * 60,
     )
+    await redis_client.set(
+        "onboarding:site_inspection",
+        json.dumps(site_inspection, ensure_ascii=False),
+        ex=30 * 24 * 60 * 60,
+    )
 
     ingest_in_progress = bool(await redis_client.get("jobs:ingest:lock"))
     if ingest_in_progress:
@@ -457,7 +564,28 @@ async def v1_onboarding_bootstrap(
             "started": False,
             "in_progress": True,
             "already_configured": False,
-            "message": "Primeiro scrap ja esta em execucao.",
+            "message": "A primeira carga já está em execução.",
+            "site_inspection": site_inspection,
+        }
+
+    if not site_inspection.get("ready_for_ingest"):
+        _log_event(
+            "onboarding_bootstrap_saved_pending_source_review",
+            setup_id=setup_id,
+            auth_sub=profile.get("sub"),
+            business_name=payload.business_name,
+            website_url=normalized_site_url,
+            recommended_source=site_inspection.get("recommended_source"),
+        )
+        return {
+            "success": True,
+            "setup_id": setup_id,
+            "started": False,
+            "in_progress": False,
+            "already_configured": False,
+            "message": site_inspection.get("message")
+            or "Configuração salva. Vamos revisar a fonte do site antes da primeira importação.",
+            "site_inspection": site_inspection,
         }
 
     first_scrape_completed = (await redis_client.get("onboarding:first_scrape:completed")) == "1"
@@ -468,7 +596,8 @@ async def v1_onboarding_bootstrap(
             "started": False,
             "in_progress": False,
             "already_configured": True,
-            "message": "Setup inicial ja concluido. Sistema pronto para uso.",
+            "message": "Configuração atualizada. A primeira carga inicial já foi concluída.",
+            "site_inspection": site_inspection,
         }
 
     await redis_client.set("onboarding:first_scrape:started_at", configured_at, ex=30 * 24 * 60 * 60)
@@ -479,6 +608,7 @@ async def v1_onboarding_bootstrap(
         auth_sub=profile.get("sub"),
         business_name=payload.business_name,
         city=payload.city,
+        website_url=normalized_site_url,
         force_full_scrape=payload.force_full_scrape,
     )
     return {
@@ -487,7 +617,8 @@ async def v1_onboarding_bootstrap(
         "started": True,
         "in_progress": True,
         "already_configured": False,
-        "message": "Setup iniciado. Executando primeiro scrap em background.",
+        "message": "Site validado. A primeira carga foi iniciada em background.",
+        "site_inspection": site_inspection,
     }
 
 
@@ -498,6 +629,8 @@ async def v1_onboarding_status(request: Request) -> Dict[str, Any]:
     started_at = await redis_client.get("onboarding:first_scrape:started_at")
     completed_flag = await redis_client.get("onboarding:first_scrape:completed")
     result_raw = await redis_client.get("onboarding:first_scrape:last_result")
+    inspection_raw = await redis_client.get("onboarding:site_inspection")
+    whatsapp_signup_raw = await redis_client.get("onboarding:whatsapp_signup:last_event")
     ingest_in_progress = bool(await redis_client.get("jobs:ingest:lock"))
 
     config_data: Dict[str, Any]
@@ -516,17 +649,109 @@ async def v1_onboarding_status(request: Request) -> Dict[str, Any]:
         except Exception:
             last_result = {"success": False, "error": "invalid_result_payload"}
 
+    site_inspection: Optional[Dict[str, Any]] = None
+    if inspection_raw:
+        try:
+            site_inspection = json.loads(inspection_raw)
+        except Exception:
+            site_inspection = {
+                "provided": False,
+                "message": "N?o foi poss?vel carregar a inspe??o do site.",
+            }
+
+    whatsapp_signup: Optional[Dict[str, Any]] = None
+    if whatsapp_signup_raw:
+        try:
+            whatsapp_signup = json.loads(whatsapp_signup_raw)
+        except Exception:
+            whatsapp_signup = {
+                "event": "INVALID_PAYLOAD",
+                "captured_at": _utc_now_iso(),
+                "error_message": "N?o foi poss?vel carregar o retorno da Meta.",
+            }
+
     return {
         "configured": bool(config_raw),
         "ingest_in_progress": ingest_in_progress,
         "first_scrape_completed": completed_flag == "1",
         "first_scrape_started_at": started_at,
         "setup_token_required": _onboarding_token_is_required(),
+        "whatsapp": _whatsapp_setup_state(),
+        "whatsapp_signup": whatsapp_signup,
         "config": config_data,
+        "site_inspection": site_inspection,
         "last_result": last_result,
         "timestamp": _utc_now_iso(),
     }
 
+
+@app.post("/v1/onboarding/whatsapp/embedded-signup")
+async def v1_onboarding_whatsapp_embedded_signup(
+    request: Request,
+    payload: MetaEmbeddedSignupEventRequest,
+) -> Dict[str, Any]:
+    profile = await _require_authenticated_session(request)
+    summary = _summarize_whatsapp_signup_event(payload)
+
+    await redis_client.set(
+        "onboarding:whatsapp_signup:last_event",
+        json.dumps(summary, ensure_ascii=False),
+        ex=30 * 24 * 60 * 60,
+    )
+
+    if payload.code:
+        await redis_client.set(
+            "onboarding:whatsapp_signup:last_code",
+            payload.code,
+            ex=60,
+        )
+
+    config_raw = await redis_client.get("onboarding:config")
+    config_data = _onboarding_defaults()
+    if config_raw:
+        try:
+            config_data = json.loads(config_raw)
+        except Exception:
+            config_data = _onboarding_defaults()
+
+    updated_config = {
+        **config_data,
+        "whatsapp_embedded_signup_last_event": summary["event"],
+        "whatsapp_embedded_signup_last_captured_at": summary["captured_at"],
+        "whatsapp_embedded_signup_session_id": summary.get("session_id"),
+        "whatsapp_embedded_signup_waba_id": summary.get("waba_id"),
+        "whatsapp_embedded_signup_phone_number_id": summary.get("phone_number_id"),
+        "whatsapp_embedded_signup_display_phone_number": summary.get("display_phone_number"),
+    }
+    await redis_client.set(
+        "onboarding:config",
+        json.dumps(updated_config, ensure_ascii=False),
+        ex=30 * 24 * 60 * 60,
+    )
+
+    _log_event(
+        "whatsapp_embedded_signup_event_captured",
+        auth_sub=profile.get("sub"),
+        event=summary.get("event"),
+        source=summary.get("source"),
+        waba_id=summary.get("waba_id"),
+        phone_number_id=summary.get("phone_number_id"),
+        code_received=summary.get("code_received"),
+        token_exchange_ready=summary.get("token_exchange_ready"),
+    )
+
+    message = "Retorno da Meta capturado com sucesso."
+    if summary.get("code_received") and not summary.get("token_exchange_ready"):
+        message = (
+            "Recebemos o c?digo da Meta, mas ainda falta o segredo do app para concluir "
+            "a troca autom?tica pelo token comercial."
+        )
+
+    return {
+        "success": True,
+        "message": message,
+        "captured": summary,
+    }
 
 def _query_listings(
     q: str = "",
