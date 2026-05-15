@@ -18,6 +18,7 @@ export function Navigation() {
 
   const navItems = [
     { key: "nav.about", href: "#about" },
+    { key: "nav.caseStudy", href: "/case-study" },
     { key: "nav.blog", href: "/blog" },
     { key: "nav.features", href: "#features" },
     { key: "nav.pricing", href: "#pricing" },
@@ -58,10 +59,10 @@ export function Navigation() {
           <div className="hidden md:flex items-center gap-3">
             <LanguageSwitcher />
             <MagneticButton
-              onClick={() => router.push("/login")}
+              onClick={() => router.push("/contact")}
               className="bg-[#FF5500] text-black font-semibold px-5 py-2 rounded-full text-sm"
             >
-              Entrar ou Cadastrar-se
+              {t("nav.bookCall")}
             </MagneticButton>
           </div>
 
@@ -91,11 +92,11 @@ export function Navigation() {
               <MagneticButton
                 onClick={() => {
                   setIsMobileMenuOpen(false);
-                  router.push("/login");
+                  router.push("/contact");
                 }}
                 className="bg-[#FF5500] text-black font-semibold px-5 py-3 rounded-full text-sm mt-2"
               >
-                Entrar ou Cadastrar-se
+                {t("nav.bookCall")}
               </MagneticButton>
             </div>
           </motion.div>

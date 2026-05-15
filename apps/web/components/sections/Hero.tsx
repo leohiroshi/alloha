@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowRight, Sparkles } from "lucide-react";
+import { ArrowRight, FileText } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { MagneticButton } from "../ui/MagneticButton";
@@ -15,7 +15,7 @@ export function Hero() {
   
   return (
     <section className="relative min-h-screen flex flex-col items-center justify-center pt-32 pb-20 px-6">
-      {/* Urgency badge */}
+      {/* MVP status */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -23,8 +23,10 @@ export function Hero() {
         className="mb-8"
       >
         <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 text-sm">
-          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-white/70">{t("hero.urgency")} <span className="text-white font-medium">{t("hero.spotsLeft")}</span></span>
+          <span className="w-2 h-2 rounded-full bg-[#FF5500]" />
+          <span className="text-white/70">
+            {t("hero.status")} <span className="text-white font-medium">{t("hero.statusDetail")}</span>
+          </span>
         </div>
       </motion.div>
 
@@ -65,7 +67,7 @@ export function Hero() {
         className="flex flex-col sm:flex-row gap-4 mb-16"
       >
         <MagneticButton
-          onClick={() => router.push("/signup")}
+          onClick={() => router.push("/contact")}
           className="group bg-[#FF5500] hover:bg-[#FF6600] text-black font-bold px-8 py-4 rounded-full text-base transition-colors"
         >
           <span className="flex items-center gap-2">
@@ -74,11 +76,11 @@ export function Hero() {
           </span>
         </MagneticButton>
         <MagneticButton
-          onClick={() => router.push("/login?mode=signup")}
+          onClick={() => router.push("/case-study")}
           className="flex items-center gap-2 text-white/80 hover:text-white font-medium px-8 py-4 rounded-full border border-white/20 hover:border-white/40 transition-colors"
           variant="secondary"
         >
-          <Sparkles className="w-4 h-4" />
+          <FileText className="w-4 h-4" />
           {t("hero.ctaSecondary")}
         </MagneticButton>
       </motion.div>
@@ -116,20 +118,6 @@ export function Hero() {
         </div>
       </motion.div>
 
-      {/* Social proof logos */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 1, delay: 0.8 }}
-        className="mt-20"
-      >
-        <p className="text-center text-sm text-white/30 mb-6">{t("hero.socialProof")}</p>
-        <div className="flex flex-wrap items-center justify-center gap-8 md:gap-12 opacity-40">
-          {["Logoteam", "LOGO", "Logoipsum", "IPSUM", "Logoipsum", "Logoteam"].map((logo, i) => (
-            <span key={i} className="text-white font-medium text-sm md:text-base">{logo}</span>
-          ))}
-        </div>
-      </motion.div>
     </section>
   );
 }

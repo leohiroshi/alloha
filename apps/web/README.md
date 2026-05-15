@@ -1,87 +1,52 @@
-# Alloha - AI Real Estate Chatbot Landing Page
+# Alloha Web
 
-A modern, responsive landing page for Alloha, an AI-powered real estate chatbot.
+Next.js frontend for the Alloha private MVP / technical case study.
+
+The web app presents Alloha honestly as a real estate AI assistant MVP: lead qualification, property search, broker handoff, and a case-study page that discloses the current audit status.
+
+## Current Positioning
+
+- Private MVP / pilot-ready technical case study.
+- Real estate AI assistant for WhatsApp-oriented lead workflows.
+- RAG-ready architecture, not a claim of RAG running in the primary endpoint.
+- No invented testimonials, customer logos, conversion metrics, or public production claims.
+
+## Main Routes
+
+- `/` - landing page with honest MVP positioning.
+- `/case-study` - technical case study, audit metrics, architecture, implemented scope, and roadmap.
+- `/blog` - content surface.
+- `/contact` - contact/support lead capture.
+- `/login`, `/signup`, `/setup`, `/dashboard` - app workflow surfaces.
 
 ## Tech Stack
 
-- **Next.js 16** - React framework with App Router
-- **TypeScript** - Type-safe development
-- **Tailwind CSS** - Utility-first styling
-- **Framer Motion** - Animations and transitions
-- **Lucide React** - Icon library
+- Next.js 16 with App Router.
+- React 19 and TypeScript.
+- Tailwind CSS.
+- Framer Motion.
+- Lucide React.
+- Supabase client for auth/session-oriented frontend flows.
 
-## Project Structure
-
-```
-alloha-frontend/
-├── app/                          # Next.js App Router
-│   ├── globals.css              # Global styles
-│   ├── layout.tsx               # Root layout
-│   └── page.tsx                 # Landing page
-├── components/
-│   ├── effects/                 # Visual effects
-│   │   └── LavaBlobs.tsx       # Animated background blobs
-│   ├── hero/                    # Hero section components
-│   │   ├── FloatingPhone.tsx   # 3D phone mockup
-│   │   ├── StatsBubble.tsx     # Stats floating bubble
-│   │   └── WaveChatBubble.tsx  # Chat bubble animation
-│   ├── layout/                  # Layout components
-│   │   ├── Footer.tsx          # Page footer
-│   │   └── Navigation.tsx      # Navigation bar
-│   ├── sections/                # Page sections
-│   │   ├── Benefits.tsx        # Benefits section
-│   │   ├── BentoGrid.tsx       # Bento grid features
-│   │   ├── CTA.tsx             # Call to action
-│   │   ├── FAQ.tsx             # FAQ accordion
-│   │   ├── Features.tsx        # Features grid
-│   │   ├── Hero.tsx            # Hero section
-│   │   ├── Pricing.tsx         # Pricing plans
-│   │   ├── Process.tsx         # Process steps
-│   │   ├── Solutions.tsx       # Solutions tags
-│   │   └── Testimonials.tsx    # Customer testimonials
-│   ├── ui/                      # UI primitives
-│   │   └── MagneticButton.tsx  # Magnetic hover button
-│   └── LanguageSwitcher.tsx    # i18n language toggle
-├── lib/
-│   └── i18n/
-│       └── LanguageContext.tsx # i18n context & translations
-├── public/
-│   ├── logo.png                # Alloha logo
-│   └── customers/              # Customer photos
-└── ...config files
-```
-
-## Getting Started
+## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Run development server
-npm run dev
-
-# Build for production
-npm run build
-
-# Start production server
-npm start
+npm run dev --workspace=apps/web
 ```
 
-## Internationalization (i18n)
+Verification:
 
-The app supports English (en) and Portuguese (pt-BR). Language preference is:
-1. Saved to localStorage
-2. Auto-detected from browser on first visit
+```bash
+npm run lint --workspace=apps/web
+npm run build --workspace=apps/web
+```
 
-To add new translations, edit `lib/i18n/LanguageContext.tsx`.
+## Content Rules
 
-## Architecture Decisions
+Keep the landing page aligned with the technical audit:
 
-- **Component Colocation**: Components are organized by feature/purpose rather than by type
-- **Direct Imports**: Using explicit imports instead of barrel exports to avoid circular dependencies
-- **Client Components**: All interactive components use `"use client"` directive
-- **Responsive Design**: Mobile-first approach with Tailwind breakpoints
-
-## License
-
-Private - All rights reserved
+- Do not add fake customer logos, testimonials, or traction claims.
+- Do not say RAG/vector search is live in the primary endpoint until it is connected and verified.
+- Do not present the app as a public production SaaS.
+- Do disclose the current MVP status, active listing count, embedding gap, and roadmap clearly.

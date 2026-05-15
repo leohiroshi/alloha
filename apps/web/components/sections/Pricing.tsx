@@ -67,15 +67,15 @@ export function Pricing() {
             transition={{ delay: 0.3, duration: 0.8 }}
             className="relative w-full max-w-md rounded-3xl p-8 text-left bg-gradient-to-br from-[#0a0a0a] to-[#111] border border-white/10 overflow-hidden"
           >
-            {/* Spots left badge */}
+            {/* Pilot status badge */}
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}
               animate={isInView ? { opacity: 1, scale: 1 } : {}}
               transition={{ delay: 0.5 }}
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 mb-6"
             >
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-              <span className="text-white/70 text-sm">3 vagas restantes</span>
+              <span className="w-2 h-2 rounded-full bg-[#FF5500]" />
+              <span className="text-white/70 text-sm">{t("pricing.mostPopular")}</span>
             </motion.div>
 
             {/* Price */}
@@ -89,13 +89,13 @@ export function Pricing() {
             {/* CTA Buttons */}
             <div className="flex gap-3 mb-8">
               <MagneticButton
-                onClick={() => router.push("/signup")}
+                onClick={() => router.push("/contact")}
                 className="flex-1 py-3.5 rounded-full font-semibold bg-[#FF5500] text-black transition-all hover:bg-[#FF6600]"
               >
                 {plan.cta}
               </MagneticButton>
               <MagneticButton
-                onClick={() => router.push("/login?mode=signup")}
+                onClick={() => router.push("/case-study")}
                 className="flex-1 py-3.5 rounded-full font-semibold bg-transparent text-white border border-white/20 hover:bg-white/5 transition-all"
               >
                 {t("pricing.trial")}

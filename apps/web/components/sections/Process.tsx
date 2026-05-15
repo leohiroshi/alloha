@@ -67,7 +67,7 @@ export function Process() {
           ))}
         </div>
 
-        <MagneticButton onClick={() => router.push("/login?mode=signup")} className="bg-[#FF5500] text-black font-semibold px-8 py-3 rounded-full">
+        <MagneticButton onClick={() => router.push("/case-study")} className="bg-[#FF5500] text-black font-semibold px-8 py-3 rounded-full">
           {t("process.cta")}
         </MagneticButton>
       </div>

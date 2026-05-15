@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm; -- Full-text search
 
 -- ====================================================================
 -- TABLE: properties
--- ImÃ³veis com suporte a vector search
+-- Imóveis com suporte a vector search
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS properties (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -50,7 +50,7 @@ CREATE INDEX idx_properties_fulltext ON properties USING gin(to_tsvector('portug
 
 -- ====================================================================
 -- TABLE: conversations
--- ConversaÃ§Ãµes do WhatsApp com state machine
+-- Conversações do WhatsApp com state machine
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -93,7 +93,7 @@ CREATE INDEX idx_messages_created ON messages(created_at DESC);
 
 -- ====================================================================
 -- TABLE: leads
--- Leads qualificados com histÃ³rico
+-- Leads qualificados com histórico
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS leads (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -121,7 +121,7 @@ CREATE INDEX idx_leads_created ON leads(created_at DESC);
 
 -- ====================================================================
 -- TABLE: urgency_alerts
--- Alertas de urgÃªncia para corretores
+-- Alertas de urgência para corretores
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS urgency_alerts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -142,7 +142,7 @@ CREATE INDEX idx_urgency_unresolved ON urgency_alerts(resolved_at) WHERE resolve
 
 -- ====================================================================
 -- TABLE: scheduled_visits
--- Agendamentos automÃ¡ticos via Google Calendar
+-- Agendamentos automáticos via Google Calendar
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS scheduled_visits (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -166,7 +166,7 @@ CREATE INDEX idx_visits_status ON scheduled_visits(status);
 
 -- ====================================================================
 -- TABLE: voice_interactions
--- HistÃ³rico de interaÃ§Ãµes de voz (PTT)
+-- Histórico de interações de voz (PTT)
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS voice_interactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -214,7 +214,7 @@ CREATE INDEX idx_whitelabel_status ON white_label_sites(deployment_status);
 
 -- ====================================================================
 -- TABLE: embedding_cache
--- Cache de embeddings para otimizaÃ§Ã£o
+-- Cache de embeddings para otimização
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS embedding_cache (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -235,7 +235,7 @@ CREATE INDEX idx_cache_embedding ON embedding_cache USING ivfflat (embedding vec
 
 -- ====================================================================
 -- TABLE: webhook_idempotency
--- PrevenÃ§Ã£o de duplicaÃ§Ã£o de webhooks
+-- Prevenção de duplicação de webhooks
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS webhook_idempotency (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -303,19 +303,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Agendar limpezas diÃ¡rias Ã s 3h AM
+-- Agendar limpezas diárias às 3h AM
 SELECT cron.schedule('cleanup-messages', '0 3 * * *', 'SELECT cleanup_old_messages()');
 SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache()');
 
 -- ====================================================================
--- FUNCTIONS: Busca hÃ­brida (Vector + Full-text)
+-- FUNCTIONS: Busca híbrida (Vector + Full-text)
 -- ====================================================================
--- NOTE: FunÃ§Ã£o especializada somente vetorial (perfil local 384 dims) usada pelo cÃ³digo Python:
+-- NOTE: Função especializada somente vetorial (perfil local 384 dims) usada pelo código Python:
 -- DROP FUNCTION IF EXISTS public.vector_property_search(vector, double precision, integer);
 -- CREATE OR REPLACE FUNCTION public.vector_property_search(
 --     query_embedding vector(384),            -- Embedding de consulta (384 dims)
---     match_threshold double precision DEFAULT 0.30, -- Similaridade mÃ­nima (0-1)
---     match_count integer DEFAULT 10                 -- NÃºmero mÃ¡ximo de resultados
+--     match_threshold double precision DEFAULT 0.30, -- Similaridade mínima (0-1)
+--     match_count integer DEFAULT 10                 -- Número máximo de resultados
 -- )
 -- RETURNS TABLE(
 --     property_id text,
@@ -330,7 +330,7 @@ SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache
 --   RETURN QUERY
 --   SELECT
 --     p.property_id,
---     COALESCE(p.title, '(sem tÃ­tulo)') AS title,
+--     COALESCE(p.title, '(sem título)') AS title,
 --     LEFT(COALESCE(p.ai_analysis, p.description, ''), 600) AS description,
 --     p.url,
 --     p.price,
@@ -343,7 +343,7 @@ SELECT cron.schedule('cleanup-cache', '0 3 * * *', 'SELECT cleanup_expired_cache
 --   LIMIT match_count;
 -- END;
 -- $$;
--- CÃ³digo Python chama parÃ¢metros: query_embedding, match_threshold, match_count.
+-- Código Python chama parâmetros: query_embedding, match_threshold, match_count.
 CREATE OR REPLACE FUNCTION hybrid_property_search(
     query_embedding vector(384),
     query_text TEXT,
@@ -399,7 +399,7 @@ ALTER TABLE white_label_sites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE embedding_cache ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhook_idempotency ENABLE ROW LEVEL SECURITY;
 
--- PolÃ­tica: Service role pode fazer tudo
+-- Política: Service role pode fazer tudo
 CREATE POLICY "Service role has full access" ON properties FOR ALL USING (auth.role() = 'service_role');
 CREATE POLICY "Service role has full access" ON conversations FOR ALL USING (auth.role() = 'service_role');
 CREATE POLICY "Service role has full access" ON messages FOR ALL USING (auth.role() = 'service_role');
@@ -415,7 +415,7 @@ CREATE POLICY "Service role has full access" ON webhook_idempotency FOR ALL USIN
 -- VIEWS: Analytics & Monitoring
 -- ====================================================================
 
--- View: EstatÃ­sticas de urgÃªncia
+-- View: Estatísticas de urgência
 CREATE OR REPLACE VIEW urgency_stats AS
 SELECT 
     DATE(created_at) AS date,
@@ -428,7 +428,7 @@ WHERE created_at > NOW() - INTERVAL '30 days'
 GROUP BY DATE(created_at), urgency_level
 ORDER BY date DESC, urgency_level DESC;
 
--- View: ConversÃµes de leads
+-- View: Conversões de leads
 CREATE OR REPLACE VIEW lead_conversion_funnel AS
 SELECT 
     DATE(created_at) AS date,
@@ -457,27 +457,27 @@ ORDER BY date DESC;
 -- INITIAL DATA / SEED
 -- ====================================================================
 
--- Inserir template padrÃ£o de white-label
+-- Inserir template padrão de white-label
 INSERT INTO white_label_sites (site_id, domain, broker_name, template_id, deployment_status)
 VALUES ('demo', 'demo.alloha.com.br', 'Demo Broker', 'modern_minimal', 'active')
 ON CONFLICT (site_id) DO NOTHING;
 
 -- ====================================================================
--- GRANTS: PermissÃµes para roles
+-- GRANTS: Permissões para roles
 -- ====================================================================
 
--- Grant para anon (acesso pÃºblico limitado)
+-- Grant para anon (acesso público limitado)
 GRANT SELECT ON properties TO anon;
 GRANT SELECT ON white_label_sites TO anon;
 
--- Grant para authenticated (usuÃ¡rios autenticados)
+-- Grant para authenticated (usuários autenticados)
 GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;
 
 -- ====================================================================
--- COMPLETE âœ…
+-- COMPLETE
 -- ====================================================================
--- Schema pronto para migraÃ§Ã£o!
+-- Schema pronto para migração!
 -- Execute: supabase db push --file scripts/supabase_schema.sql
 -- ====================================================================

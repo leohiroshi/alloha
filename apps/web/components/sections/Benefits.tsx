@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import { motion, useInView } from "framer-motion";
-import { Check, Star } from "lucide-react";
+import { Check, ClipboardCheck } from "lucide-react";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 
 export function Benefits() {
@@ -70,7 +70,7 @@ export function Benefits() {
             </motion.div>
           </div>
 
-          {/* Right - Testimonial */}
+          {/* Right - Current status */}
           <motion.div
             initial={{ opacity: 0, x: 40 }}
             animate={isInView ? { opacity: 1, x: 0 } : {}}
@@ -78,21 +78,12 @@ export function Benefits() {
             className="relative"
           >
             <div className="p-8 rounded-3xl bg-gradient-to-b from-white/[0.08] to-white/[0.02] border border-white/10">
-              <div className="flex gap-1 mb-4">
-                {[...Array(5)].map((_, i) => (
-                  <Star key={i} className="w-4 h-4 fill-[#FF5500] text-[#FF5500]" />
-                ))}
+              <div className="w-12 h-12 rounded-2xl bg-[#FF5500]/15 border border-[#FF5500]/20 flex items-center justify-center mb-5">
+                <ClipboardCheck className="w-5 h-5 text-[#FF5500]" />
               </div>
-              <p className="text-white/80 text-lg leading-relaxed mb-6">
-                {t("benefits.testimonial")}
-              </p>
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#FF5500] to-[#FF8800]" />
-                <div>
-                  <p className="text-white font-medium">{t("benefits.testimonial.author")}</p>
-                  <p className="text-white/40 text-sm">{t("benefits.testimonial.role")}</p>
-                </div>
-              </div>
+              <h3 className="text-white font-semibold text-xl mb-4">{t("benefits.status.title")}</h3>
+              <p className="text-white/70 text-base leading-relaxed mb-6">{t("benefits.status.body")}</p>
+              <p className="text-sm text-white/35">{t("benefits.status.meta")}</p>
             </div>
 
             {/* Decorative glow */}

@@ -16,10 +16,9 @@ const playfair = Playfair_Display({
 });
 
 export const metadata: Metadata = {
-  title: 'Alloha | AI Real Estate Chatbot - Never Sleep on Leads',
-  description: 'Alloha is an AI-powered real estate chatbot that works 24/7. While the city sleeps, the ocean keeps moving. Never miss another lead.',
-  generator: 'v0.app',
-  keywords: ['real estate', 'AI chatbot', 'lead generation', '24/7 support', 'property'],
+  title: 'Alloha | Real Estate AI Assistant MVP',
+  description: 'Private technical MVP exploring real estate lead qualification, property search, and broker handoff with Next.js, FastAPI, Supabase/PostgreSQL, Redis, and WhatsApp-oriented workflows.',
+  keywords: ['real estate AI', 'technical MVP', 'lead qualification', 'property search', 'FastAPI', 'Next.js', 'Supabase', 'pgvector'],
   icons: {
     icon: [
       {
