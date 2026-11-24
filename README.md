@@ -4,6 +4,8 @@ Private MVP / technical case study for a real estate AI assistant.
 
 Alloha explores WhatsApp-oriented lead qualification, property search, and broker handoff workflows using a Next.js frontend, FastAPI backend, Supabase/PostgreSQL, Redis, and a model gateway. The repository includes a RAG-ready architecture and pgvector schema/RPC, but this is not presented as a public production SaaS.
 
+The [local RAG demo](#local-rag-demo) runs against a synthetic property catalog and can evaluate retrieval and answers without credentials.
+
 ## Current Status
 
 This project is best evaluated as a technical portfolio case study and private pilot candidate.
@@ -45,6 +47,7 @@ packages/
   shared/       Shared workspace package area
 scripts/
   benchmark_alloha.py  Technical audit and benchmark helper
+  rag_demo.py           Local property retrieval, generation, and evaluation
 ```
 
 Core stack:
@@ -54,6 +57,33 @@ Core stack:
 - Data: Supabase/PostgreSQL with pgvector-ready schema.
 - Workflow infra: Redis-compatible cache/lock/rate-limit hooks.
 - AI integration: model gateway plus RAG-ready services.
+
+## Local RAG Demo
+
+From the repository root, use Python 3.11 or newer. The default run uses only the standard library, with weighted lexical retrieval and a deterministic answer from the top listing. It requires no accounts, downloads, or running services.
+
+```bash
+python scripts/rag_demo.py --query "apartamento com varanda" --neighborhood "Agua Verde" --transaction aluguel --max-price 3000
+python scripts/rag_demo.py --eval --repeat 5 --report rag-report.json
+```
+
+The query returns an answer in Portuguese, the cited listing IDs, and retrieval and total latency. Neighborhood, transaction type, price ceiling, and `--required-feature` are hard filters; the question itself ranks the remaining listings. For example, appending `--required-feature piscina` to the query above returns no match. The catalog and labeled cases are in [`scripts/fixtures/rag_demo.json`](scripts/fixtures/rag_demo.json).
+
+For semantic retrieval and generated answers, start [Ollama](https://docs.ollama.com/), download two local models, and rerun the same cases:
+
+```bash
+ollama pull embeddinggemma
+ollama pull qwen2.5:3b
+python scripts/rag_demo.py --eval --embed-model embeddinggemma --chat-model qwen2.5:3b --report rag-ollama.json
+```
+
+You can enable either model independently to compare semantic retrieval with lexical retrieval or generated answers with the deterministic baseline. Ollama runs on `127.0.0.1:11434` by default. `--top-k` and `--min-score` let you vary the retrieval depth and minimum cosine similarity. Use the same settings when comparing reports.
+
+The report records Recall@K and mean reciprocal rank for retrieval, expected-fact and cited-ID checks for answers, the abstention rate for unsupported requests, and p50/p95 latency. The report includes per-case results and any token counts returned by Ollama. Latency excludes catalog indexing, which is reported separately. The script exits with status 1 if an answer check fails. Synthetic labels and text checks catch specific regressions but do not establish general factual accuracy.
+
+The standard-library baseline has zero external API charges. Ollama execution depends on the models and machine used, so the report leaves provider cost unset in model mode. The demo runs independently of the deployed search and chat routes.
+
+In a local run of the lexical baseline, all 13 synthetic cases passed over five repetitions (65 evaluations). Recall@3, the answer-check pass rate, and abstention on unsupported requests were each 100% on this fixture. These results describe the local baseline on the included catalog. The Ollama path was checked with simulated API responses; a model-quality benchmark is pending.
 
 ## Local Development
 

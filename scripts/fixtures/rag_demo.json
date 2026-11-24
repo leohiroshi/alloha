@@ -1,0 +1,169 @@
+{
+  "catalog": [
+    {
+      "id": "CTBA-01",
+      "title": "Apartamento com varanda",
+      "neighborhood": "Água Verde",
+      "transaction": "aluguel",
+      "price": 2800,
+      "description": "Dois quartos, varanda e uma vaga de garagem. Prédio com elevador."
+    },
+    {
+      "id": "CTBA-02",
+      "title": "Apartamento mobiliado",
+      "neighborhood": "Água Verde",
+      "transaction": "aluguel",
+      "price": 3900,
+      "description": "Dois quartos, varanda, piscina e duas vagas de garagem."
+    },
+    {
+      "id": "CTBA-03",
+      "title": "Studio compacto",
+      "neighborhood": "Centro",
+      "transaction": "aluguel",
+      "price": 1650,
+      "description": "Studio mobiliado próximo ao transporte público, com lavanderia compartilhada."
+    },
+    {
+      "id": "CTBA-04",
+      "title": "Casa com quintal",
+      "neighborhood": "Santa Felicidade",
+      "transaction": "venda",
+      "price": 650000,
+      "description": "Três quartos, quintal amplo e churrasqueira. O imóvel aceita animais."
+    },
+    {
+      "id": "CTBA-05",
+      "title": "Casa com piscina",
+      "neighborhood": "Santa Felicidade",
+      "transaction": "venda",
+      "price": 820000,
+      "description": "Quatro quartos, piscina e área gourmet coberta."
+    },
+    {
+      "id": "CTBA-06",
+      "title": "Sala comercial",
+      "neighborhood": "Batel",
+      "transaction": "aluguel",
+      "price": 2200,
+      "description": "Sala comercial de 35 m², recepção compartilhada e elevador."
+    },
+    {
+      "id": "CTBA-07",
+      "title": "Apartamento térreo acessível",
+      "neighborhood": "Portão",
+      "transaction": "venda",
+      "price": 315000,
+      "description": "Dois quartos, entrada sem degraus e banheiro adaptado."
+    },
+    {
+      "id": "CTBA-08",
+      "title": "Loft com coworking",
+      "neighborhood": "Centro",
+      "transaction": "aluguel",
+      "price": 2100,
+      "description": "Loft mobiliado com espaço de coworking e bicicletário."
+    },
+    {
+      "id": "CTBA-09",
+      "title": "Casa térrea com edícula",
+      "neighborhood": "Portão",
+      "transaction": "venda",
+      "price": 540000,
+      "description": "Casa com escritório na edícula, jardim e duas vagas de garagem."
+    }
+  ],
+  "cases": [
+    {
+      "id": "varanda-dentro-do-orcamento",
+      "question": "Quero um apartamento de dois quartos com varanda",
+      "filters": {"neighborhood": "Agua Verde", "transaction": "aluguel", "max_price": 3000},
+      "expected_ids": ["CTBA-01"],
+      "expected_terms": ["varanda", "Água Verde"]
+    },
+    {
+      "id": "studio-perto-do-transporte",
+      "question": "Procuro studio com acesso ao transporte público",
+      "filters": {"neighborhood": "Centro"},
+      "expected_ids": ["CTBA-03"],
+      "expected_terms": ["studio", "transporte público"]
+    },
+    {
+      "id": "espaco-para-animais",
+      "question": "Quero uma casa com quintal que aceite animais",
+      "filters": {"transaction": "venda"},
+      "expected_ids": ["CTBA-04"],
+      "expected_terms": ["quintal", "animais"]
+    },
+    {
+      "id": "imovel-com-piscina-para-comprar",
+      "question": "Tem casa com piscina em Santa Felicidade?",
+      "filters": {"transaction": "venda"},
+      "expected_ids": ["CTBA-05"],
+      "expected_terms": ["piscina", "Santa Felicidade"]
+    },
+    {
+      "id": "escritorio-com-recepcao",
+      "question": "Quero alugar uma sala comercial com recepção",
+      "filters": {"transaction": "aluguel"},
+      "expected_ids": ["CTBA-06"],
+      "expected_terms": ["sala comercial", "recepção"]
+    },
+    {
+      "id": "acessibilidade",
+      "question": "Procuro imóvel sem degraus e banheiro adaptado",
+      "filters": {"transaction": "venda"},
+      "expected_ids": ["CTBA-07"],
+      "expected_terms": ["sem degraus", "banheiro adaptado"]
+    },
+    {
+      "id": "loft-para-trabalhar",
+      "question": "Tem loft mobiliado com coworking e bicicletário?",
+      "filters": {"neighborhood": "Centro"},
+      "expected_ids": ["CTBA-08"],
+      "expected_terms": ["coworking", "bicicletário"]
+    },
+    {
+      "id": "dois-apartamentos-com-varanda",
+      "question": "Quero um apartamento de dois quartos com varanda",
+      "filters": {"neighborhood": "Água Verde", "transaction": "aluguel"},
+      "expected_ids": ["CTBA-01", "CTBA-02"],
+      "expected_terms": ["varanda", "dois quartos"]
+    },
+    {
+      "id": "orcamento-baixo",
+      "question": "Apartamento para alugar em Água Verde",
+      "filters": {"neighborhood": "Água Verde", "transaction": "aluguel", "max_price": 1500},
+      "expected_ids": [],
+      "expected_terms": []
+    },
+    {
+      "id": "bairro-fora-da-cobertura",
+      "question": "Casa com quintal para venda",
+      "filters": {"neighborhood": "Boqueirão", "transaction": "venda"},
+      "expected_ids": [],
+      "expected_terms": []
+    },
+    {
+      "id": "transacao-indisponivel",
+      "question": "Procuro sala comercial no Batel",
+      "filters": {"neighborhood": "Batel", "transaction": "venda"},
+      "expected_ids": [],
+      "expected_terms": []
+    },
+    {
+      "id": "piscina-fora-do-orcamento",
+      "question": "Quero alugar um apartamento com piscina em Água Verde",
+      "filters": {"neighborhood": "Água Verde", "transaction": "aluguel", "max_price": 3000, "required_features": ["piscina"]},
+      "expected_ids": [],
+      "expected_terms": []
+    },
+    {
+      "id": "pergunta-fora-do-catalogo",
+      "question": "Qual será a previsão meteorológica amanhã?",
+      "filters": {},
+      "expected_ids": [],
+      "expected_terms": []
+    }
+  ]
+}
